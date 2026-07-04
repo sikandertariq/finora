@@ -7,9 +7,12 @@
 
 - **Build-order step 1 is DONE and green:** the multi-tenant isolation foundation + a runnable
   monorepo skeleton (Django backend, Next.js frontend, Docker Compose).
-- **All work is on branch `feat/tenant-foundation`** (8 commits), **not merged to `main`**, **no git remote** configured.
-- **Backend tests: 16/16 passing.** Frontend builds clean.
-- **Next up:** build-order step 2 — `Expense` / `Receipt` models + `ExpenseService`.
+- **Build-order step 2 is DONE and green:** `Expense` / `Receipt` models (both tenant-scoped) +
+  `ExpenseService` (create/update/get/list/delete, HTTP-free).
+- **All work is on branch `feat/tenant-foundation`**, **not merged to `main`**, **no git remote** configured.
+- **Backend tests: 27/27 passing.** Frontend builds clean.
+- **Next up:** build-order step 3 — `LLMProvider` Protocol + `FakeLLMProvider` + `ReceiptExtraction`
+  Pydantic schema.
 
 ## What exists right now
 
@@ -26,7 +29,8 @@ finora/
 ├─ backend/                  # Django 5.2 + DRF
 │  ├─ config/                # settings (base/dev/test), urls, celery, wsgi/asgi
 │  ├─ apps/tenancy/          # THE isolation layer (see below)
-│  ├─ tests/                 # pytest suite + throwaway ScopedThing model
+│  ├─ apps/expenses/         # Expense/Receipt models + ExpenseService (step 2)
+│  ├─ tests/                 # pytest suite + throwaway ScopedThing model + factories.py
 │  ├─ pyproject.toml         # deps + pytest config
 │  └─ .venv/                 # local venv (gitignored)
 └─ frontend/                 # Next.js 15 app shell ("Finora — coming soon")
@@ -51,6 +55,20 @@ tenant; every DB query is then auto-limited to that tenant; the record is cleare
 ends. Background robots (Celery tasks) set the same badge. No badge → the app refuses loudly
 instead of leaking or silently returning nothing. (Explainer artifact:
 https://claude.ai/code/artifact/d29ce788-c26f-4fe6-b27a-ef5db2cdbccf)
+
+### Expenses (`backend/apps/expenses/`) — step 2
+
+| File | Responsibility |
+|---|---|
+| `models.py` | `Receipt` (uploaded file + who/when) and `Expense` (vendor/amount/currency/category/date), both inherit `TenantScopedModel`. `Expense.receipt` is an optional one-to-one link back to the `Receipt` it was created from. |
+| `services.py` | `ExpenseService` — `create`, `update`, `get`, `list`, `delete`. Plain data in, model instances out, no `request`/`Response`. Rejects amounts `<= 0`. |
+
+**Plain-English version:** an `Expense` is one line-item cost (who it was paid to, how much, what
+category). A `Receipt` is just the uploaded proof file — it can exist on its own (uploaded, not yet
+turned into an expense) or be attached to the `Expense` it produced. All the create/edit/delete
+rules live in one place (`ExpenseService`) so that later, when the AI agent processes a receipt in
+the background, it calls the exact same code path a human clicking "save" would — no duplicated
+rules to drift out of sync.
 
 ## Key decisions & deviations (know these before extending)
 
@@ -78,7 +96,7 @@ https://claude.ai/code/artifact/d29ce788-c26f-4fe6-b27a-ef5db2cdbccf)
 ```bash
 cd backend
 source .venv/bin/activate          # venv already created on this machine
-python -m pytest -q                # expect: 16 passed
+python -m pytest -q                # expect: 27 passed
 python manage.py check             # expect: no issues
 ```
 
@@ -96,7 +114,7 @@ API at http://localhost:8000/api/ · frontend: `cd frontend && npm run dev` → 
 
 Per [`CLAUDE.md`](CLAUDE.md), build the **Receipt Processor as a vertical slice** next, in order:
 
-- [ ] **Step 2** — `Expense` / `Receipt` models (both inherit `TenantScopedModel`) + `ExpenseService`
+- [x] **Step 2** — `Expense` / `Receipt` models (both inherit `TenantScopedModel`) + `ExpenseService`
       (HTTP-free business logic; thin viewset → serializer → service → model).
 - [ ] **Step 3** — `LLMProvider` Protocol + a `FakeLLMProvider` (decided: fake-only first, no real API
       keys yet) + a `ReceiptExtraction` Pydantic schema (the validate-or-reject safety boundary).
@@ -124,5 +142,7 @@ Then generalize to the other three agents (Invoice Chaser, Expense Approver, Mon
 ## Suggested first move in a new session
 
 1. `git branch --show-current` → confirm on `feat/tenant-foundation` (or merge to `main` first).
-2. Skim `backend/apps/tenancy/` to load the isolation model into context.
-3. Start step 2 with the design/plan skills, following the same TDD + small-commit rhythm.
+2. Skim `backend/apps/tenancy/` and `backend/apps/expenses/` to load the isolation model + expense
+   domain into context.
+3. Start step 3 (`LLMProvider` Protocol + `FakeLLMProvider` + `ReceiptExtraction` Pydantic schema)
+   with the design/plan skills, following the same TDD + small-commit rhythm.
