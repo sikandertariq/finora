@@ -2,6 +2,11 @@
 
 Project context and engineering guardrails for Claude Code. Read this before writing or changing anything.
 
+> **▶ Current status / where to continue:** see [`HANDOFF.md`](HANDOFF.md).
+> Build-order step 1 (tenant isolation foundation) is done and tested on branch
+> `feat/tenant-foundation`. Next up: step 2 (`Expense`/`Receipt` + `ExpenseService`).
+> This spec below is the locked source of truth — do not rewrite it.
+
 ## What we're building
 
 A multi-tenant SaaS where agencies, small businesses, and freelancers manage invoicing, expenses, and financial workflows. The differentiator is **AI agents** that do the repetitive work (extract receipts, chase overdue invoices, route approvals, run monthly close) and surface everything as **reviewable, reversible, logged suggestions**.
