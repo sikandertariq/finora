@@ -19,6 +19,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "apps.tenancy",
     "apps.expenses",
+    "apps.agents",
 ]
 
 MIDDLEWARE = [
