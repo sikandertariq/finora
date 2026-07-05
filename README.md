@@ -8,14 +8,16 @@ agent action is reviewable, reversible, and logged.
 
 ## Status
 
-**Build-order steps 1-6 complete:** the multi-tenant isolation layer; `Expense`/
-`Receipt` models + `ExpenseService`; an `LLMProvider` protocol with a real
-`GeminiProvider`; an `AgentWorkflow` state machine + Celery task that runs the
-Receipt Processor against Gemini; thin REST endpoints for expenses, receipt
-upload, and confirming/rejecting a workflow; and a working Next.js frontend
-(sign-in, upload, live-polling review/confirm UI). Manually verified end-to-end
+**Build-order steps 1-7 complete — the Receipt Processor vertical slice is done.**
+The multi-tenant isolation layer; `Expense`/`Receipt` models + `ExpenseService`;
+an `LLMProvider` protocol with a real `GeminiProvider`; an `AgentWorkflow` state
+machine + Celery task that runs the Receipt Processor against Gemini; thin REST
+endpoints for expenses, receipt upload, and confirming/rejecting a workflow; a
+working Next.js frontend (sign-in, upload, live-polling review/confirm UI); and
+an `AuditLog` recording every approve/reject. Manually verified end-to-end
 against a real Gemini call with a real receipt image. See [`HANDOFF.md`](HANDOFF.md)
-for the full detail. The audit log comes next.
+for the full detail. **Next: generalize to the other three agents + Co-Pilot** —
+none of that exists yet.
 
 ## Layout
 
@@ -105,6 +107,9 @@ curl -s -X POST localhost:8000/api/agent-workflows/1/confirm/ \
 # or reject it instead -> no Expense created
 curl -s -X POST localhost:8000/api/agent-workflows/1/reject/ \
   -H "Authorization: Bearer <access-token>" -H 'Content-Type: application/json' -d '{}'
+
+# see what got logged for that workflow -- who did what, and (for a confirm) what was saved
+curl -s "localhost:8000/api/audit-logs/?workflow=1" -H "Authorization: Bearer <access-token>"
 ```
 
 ## Architecture notes

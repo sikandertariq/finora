@@ -1,7 +1,7 @@
 # Finora — Handoff / Continue Here
 
 > Living status doc. If you're a fresh session: read [`CLAUDE.md`](CLAUDE.md) (the locked
-> spec) first, then this file for *where we actually are*. Last updated: **2026-07-05**.
+> spec) first, then this file for *where we actually are*. Last updated: **2026-07-06**.
 
 ## TL;DR
 
@@ -29,10 +29,15 @@
   browser on a different port can't call the API without it). **Manually verified against a real,
   running stack** (real Postgres-alternative SQLite, real Redis, real Celery worker, real Gemini
   call, real synthetic receipt image) — see the writeup below for exactly what that proved.
+- **Build-order step 7 is DONE:** `AuditLog` model + wired into `AgentWorkflowService.approve()`/
+  `.reject()` + a minimal read-only `GET /api/audit-logs/` (optionally `?workflow=<id>`) so the log
+  is actually reviewable, not write-only. Manually verified over real HTTP against the running
+  dev stack, not just `pytest`.
 - **All work is on branch `feat/tenant-foundation`**, **not merged to `main`**, **no git remote** configured.
-- **Backend tests: 73/73 passing.** Frontend builds and lints clean.
-- **Next up:** build-order step 7 — `AuditLog` wired to the confirm action. Then generalize to the
-  other three agents + Co-Pilot.
+- **Backend tests: 82/82 passing.** Frontend builds and lints clean.
+- **Next up:** the whole build order (steps 1–7) is done. Per CLAUDE.md, generalize the vertical
+  slice to the other three agents (Invoice Chaser, Expense Approver, Monthly Close) + the
+  AI Co-Pilot — none of that exists yet.
 
 ## What exists right now
 
@@ -52,7 +57,8 @@ finora/
 │  ├─ apps/expenses/         # Expense/Receipt models + ExpenseService (step 2) + schemas.py (step 3)
 │  ├─ apps/agents/           # LLMProvider + GeminiProvider (step 3) + AgentWorkflow +
 │  │                         # ReceiptProcessorService + Celery task (step 4) +
-│  │                         # AgentWorkflowService + REST endpoints (step 5)
+│  │                         # AgentWorkflowService + REST endpoints (step 5) +
+│  │                         # AuditLog + /api/audit-logs/ (step 7)
 │  ├─ scripts/dev-server.sh  # runs the API on SQLite, no Docker needed (step 6)
 │  ├─ tests/                 # pytest suite + throwaway ScopedThing model + factories.py + conftest.py
 │  ├─ pyproject.toml         # deps + pytest config
@@ -254,6 +260,35 @@ preview:**
    immediately showed the correct, current state. **No refresh-token flow exists yet** — logged as
    a known gap, not fixed now, since building it wasn't in this step's scope.
 
+### AuditLog (`backend/apps/agents/models.py`, `services.py`, `views.py`) — step 7
+
+| File | Responsibility |
+|---|---|
+| `models.py` | `AuditLog` (`TenantScopedModel`) — `workflow` (FK), `actor` (FK to `User`), `action` (plain string, e.g. `"approved"`/`"rejected"`), `metadata` (JSON, whatever detail that action needs to record). **Append-only by convention** — no `update()` method exists or should exist; a row is written once and never touched again. |
+| `services.py` | `AgentWorkflowService.approve()`/`.reject()` each now write exactly one `AuditLog` row as their last step. `approve()`'s metadata captures `resulting_expense_id` and any human `overrides` — enough to answer "what actually got saved, and did a human change anything first?" without a second query. |
+| `views.py` | `AuditLogViewSet` — read-only `GET /api/audit-logs/`, optionally `?workflow=<id>`. Nothing ever writes through this endpoint; only the service does. |
+
+**Plain-English version:** every time a human approves or rejects a receipt, one permanent line
+gets written down — who did it, to which workflow, and (for an approval) which expense it produced
+and whether they changed anything from what the AI suggested first. This is the literal
+"logged" half of "the agent proposes, the human disposes, and it's reviewable, reversible, and
+logged" — CLAUDE.md's core principle for the whole product, now actually true for one action.
+
+**Why `action` is a plain string, not a choices enum:** same reasoning as `AgentWorkflow.workflow_type`
+in step 4 — the other three agents will each introduce their own action names later, and none of
+them should need to edit a shared enum in `apps/agents/` to do it.
+
+**Why a read endpoint was added even though the build-order line only said "wired to the confirm
+action":** an audit log nobody can ever read isn't "reviewable" in any meaningful sense — write-only
+logging satisfies the letter of step 7 but not the principle it exists to serve. The endpoint is
+deliberately minimal (list + filter by workflow, no UI for it yet — that's frontend work, out of
+scope here).
+
+**Not done in this step, on purpose:** "reversible" (undoing an approval — e.g. deleting the
+resulting `Expense` and reopening the workflow) is a real feature with its own business rules and
+wasn't part of what step 7 asked for. `AuditLog` records *that* something happened; it doesn't yet
+give anyone a button to undo it.
+
 ## Key decisions & deviations (know these before extending)
 
 1. **Django 5.2** (spec said "Django 5"; plan first said `<5.2`). The only Python on this machine is
@@ -288,7 +323,7 @@ preview:**
 ```bash
 cd backend
 source .venv/bin/activate          # venv already created on this machine
-python -m pytest -q                # expect: 73 passed
+python -m pytest -q                # expect: 82 passed
 python manage.py check             # expect: no issues
 ```
 
@@ -374,11 +409,13 @@ Per [`CLAUDE.md`](CLAUDE.md), build the **Receipt Processor as a vertical slice*
 - [x] **Step 6** — frontend: upload zone → React Query mutation → poll workflow status → review/confirm
       UI (Zustand only for ephemeral UI state). Manually verified against a real running stack
       (see the writeup above) — real Gemini call, correct extraction, correct saved Expense.
-- [ ] **Step 7** — `AuditLog` wired to the confirm action (`AgentWorkflowService.approve()` /
-      `.reject()` in `apps/agents/services.py` are where the `AuditLog.objects.create(...)` calls
-      will go).
+- [x] **Step 7** — `AuditLog` wired into `AgentWorkflowService.approve()`/`.reject()`, plus a
+      minimal read-only `GET /api/audit-logs/` (see the writeup above for why the read endpoint
+      was added despite not being named explicitly).
 
-Then generalize to the other three agents (Invoice Chaser, Expense Approver, Monthly Close) + Co-Pilot.
+**The build order (steps 1–7) is complete.** Next: generalize to the other three agents (Invoice
+Chaser, Expense Approver, Monthly Close) + the AI Co-Pilot. None of that exists yet — this vertical
+slice (Receipt Processor only) is the whole product so far.
 
 ## Conventions to keep following
 
@@ -399,6 +436,9 @@ Then generalize to the other three agents (Invoice Chaser, Expense Approver, Mon
   timing, and real third-party API behavior are all invisible to the Django test client. Run it
   for real — see step 6's writeup above for two bugs/gaps this caught that automated tests could
   not have.
+- **Any state-changing action a human takes on an agent's output writes an `AuditLog` row** as the
+  last step of the service method that performs it (see step 7) — not in the viewset, not as an
+  afterthought. When the next agent's approve/reject-equivalent action gets built, it gets this too.
 - **Do a review** and ask a "why this over that?" design question after any non-trivial code (per the
   practice format in the user's global setup).
 
@@ -408,6 +448,10 @@ Then generalize to the other three agents (Invoice Chaser, Expense Approver, Mon
 2. Skim `backend/apps/tenancy/`, `backend/apps/expenses/`, `backend/apps/agents/` (`llm.py`,
    `models.py`, `services.py`, `tasks.py`, `views.py`), and `frontend/src/` (`lib/`, `hooks/`,
    `components/`) to load the isolation model, expense domain, agent/LLM/REST boundary, and the
-   frontend into context.
-3. Start step 7 (`AuditLog` wired to the confirm/reject actions in `AgentWorkflowService`) with the
-   design/plan skills, following the same TDD + small-commit rhythm.
+   frontend into context — this is the full Receipt Processor vertical slice, steps 1–7.
+3. The locked build order is done. Next real decision: which of the other three agents (Invoice
+   Chaser, Expense Approver, Monthly Close) or the Co-Pilot to build next, and whether to first
+   generalize any of `AgentWorkflow`/`AgentWorkflowService` (currently receipt-specific in a few
+   places — e.g. `AgentWorkflow.receipt` is a direct FK, not generic) before adding a second agent,
+   or let the second agent's real needs drive that refactor instead of guessing now. Bring this to
+   the user as a real decision point, not something to assume.

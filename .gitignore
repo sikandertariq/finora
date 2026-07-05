@@ -8,3 +8,4 @@ media/
 *.sqlite3
 .venv/
 *.egg-info/
+dump.rdb
