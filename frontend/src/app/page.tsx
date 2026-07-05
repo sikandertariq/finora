@@ -1,7 +1,33 @@
+"use client";
+
+import { useAuth } from "@/lib/auth";
+import { LoginForm } from "@/components/login-form";
+import { UploadZone } from "@/components/upload-zone";
+import { WorkflowPanel } from "@/components/workflow-panel";
+import { Button } from "@/components/ui/button";
+
 export default function Home() {
+  const { token, signOut } = useAuth();
+
   return (
-    <main className="flex min-h-screen items-center justify-center">
-      <h1 className="text-2xl font-semibold">Finora — coming soon</h1>
+    <main className="flex min-h-screen flex-col items-center gap-8 p-10">
+      <div className="flex w-full max-w-md items-center justify-between">
+        <h1 className="text-2xl font-semibold">Finora</h1>
+        {token && (
+          <Button variant="ghost" size="sm" onClick={signOut}>
+            Sign out
+          </Button>
+        )}
+      </div>
+
+      {!token ? (
+        <LoginForm />
+      ) : (
+        <>
+          <UploadZone />
+          <WorkflowPanel />
+        </>
+      )}
     </main>
   );
 }
