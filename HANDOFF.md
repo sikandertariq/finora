@@ -24,10 +24,15 @@
   `POST /api/receipts/` (upload → starts the agent), and `AgentWorkflowViewSet` (list/retrieve +
   `confirm`/`reject` actions). All business logic stayed in `ExpenseService` /
   `AgentWorkflowService` (new); the view layer only parses/validates/delegates/responds.
+- **Build-order step 6 is DONE:** the actual frontend — sign-in, an upload zone, live polling, and
+  a review/confirm form, wired to the real API. `django-cors-headers` added to the backend (a
+  browser on a different port can't call the API without it). **Manually verified against a real,
+  running stack** (real Postgres-alternative SQLite, real Redis, real Celery worker, real Gemini
+  call, real synthetic receipt image) — see the writeup below for exactly what that proved.
 - **All work is on branch `feat/tenant-foundation`**, **not merged to `main`**, **no git remote** configured.
-- **Backend tests: 73/73 passing.** Frontend builds clean.
-- **Next up:** build-order step 6 — frontend: upload zone → React Query mutation → poll workflow
-  status → review/confirm UI (Zustand only for ephemeral UI state).
+- **Backend tests: 73/73 passing.** Frontend builds and lints clean.
+- **Next up:** build-order step 7 — `AuditLog` wired to the confirm action. Then generalize to the
+  other three agents + Co-Pilot.
 
 ## What exists right now
 
@@ -48,10 +53,17 @@ finora/
 │  ├─ apps/agents/           # LLMProvider + GeminiProvider (step 3) + AgentWorkflow +
 │  │                         # ReceiptProcessorService + Celery task (step 4) +
 │  │                         # AgentWorkflowService + REST endpoints (step 5)
+│  ├─ scripts/dev-server.sh  # runs the API on SQLite, no Docker needed (step 6)
 │  ├─ tests/                 # pytest suite + throwaway ScopedThing model + factories.py + conftest.py
 │  ├─ pyproject.toml         # deps + pytest config
 │  └─ .venv/                 # local venv (gitignored)
-└─ frontend/                 # Next.js 15 app shell ("Finora — coming soon")
+├─ .claude/launch.json       # preview_start configs for backend + frontend (step 6)
+└─ frontend/                 # Next.js 15 — sign-in, upload zone, live-polling review/confirm UI (step 6)
+   └─ src/
+      ├─ lib/                # types.ts (hand-written), api.ts (fetch client), auth.ts (token hook)
+      ├─ store/               # workflow-ui-store.ts — the one Zustand store (see below)
+      ├─ hooks/use-receipts.ts # React Query: upload/poll/confirm/reject
+      └─ components/          # login-form, upload-zone, workflow-panel, review-form
 ```
 
 ### The isolation layer (`backend/apps/tenancy/`) — the heart of step 1
@@ -191,6 +203,57 @@ isn't what the frontend polls or shows a review UI for — the workflow tracking
 Naming the URL after the resource being uploaded (`receipts`) while returning the resource that
 matters next (the workflow) was a deliberate mismatch, not an oversight.
 
+### Frontend (`frontend/src/`) — step 6
+
+| File | Responsibility |
+|---|---|
+| `lib/types.ts` | Hand-written TS interfaces mirroring the DRF serializers exactly (no OpenAPI codegen, per CLAUDE.md). Keep these in sync by hand when a serializer changes. |
+| `lib/api.ts` | Plain `fetch` wrapper — `login`, `uploadReceipt`, `getWorkflow`, `confirmWorkflow`, `rejectWorkflow`. Nothing framework-specific; React Query hooks call these. |
+| `lib/auth.ts` | `useAuth()` — the access token, backed by `localStorage`, read via `useSyncExternalStore` (not `useState`+`useEffect`; see "why" below). **Deliberately not the Zustand store** — a session token is persistent app state, not the ephemeral UI-only state Zustand is reserved for here. No refresh-token flow yet (see limitation below). |
+| `store/workflow-ui-store.ts` | The **one** Zustand store: `activeWorkflowId` — which workflow is currently open for review. Same shape as CLAUDE.md's own "tenant switcher" example. The workflow's actual data (status, extracted fields) is server state and lives in React Query, keyed off this id — never duplicated into Zustand. |
+| `hooks/use-receipts.ts` | React Query: `useUploadReceipt` (mutation), `useWorkflow(id)` (query — polls every 2s while `pending`/`running`, stops once settled), `useConfirmWorkflow`/`useRejectWorkflow` (mutations). |
+| `components/` | `login-form.tsx`, `upload-zone.tsx` (drag-drop + file picker), `workflow-panel.tsx` (status badge + routes to the review form), `review-form.tsx` (react-hook-form + zod, pre-filled from `extracted_data`, every field overridable before saving). |
+
+**Why `useSyncExternalStore` for the auth token, not `useState`+`useEffect`:** reading
+`localStorage` inside an effect and calling `setState` synchronously is exactly the pattern
+React's own lint rule (`react-hooks/set-state-in-effect`) now flags — it causes an extra render
+and doesn't handle server/client mismatches cleanly. `useSyncExternalStore` is the primitive React
+ships specifically for "a value lives outside React, keep a component in sync with it," and it's
+SSR-safe out of the box (no manual "hydrated" flag needed).
+
+**A real bug the tests couldn't have caught, only a live browser could:** `ExpenseViewSet` and
+`AgentWorkflowViewSet` both worked fine in `pytest` but the first live upload 500'd —
+`django-cors-headers` wasn't installed, so the browser (a different origin/port than the API)
+silently blocked the request before Django even logged CORS was the issue clearly. Fixed by adding
+`corsheaders` + `CorsMiddleware` + `CORS_ALLOWED_ORIGINS` (defaults to `http://localhost:3000`).
+**No Django test would ever catch a missing CORS header** — the Django test client doesn't enforce
+browser-origin rules, so this class of bug is invisible to `pytest` by construction, not by
+oversight. This is exactly why "run it in an actual browser" matters even after a green test suite.
+
+**Manually verified against a real, fully running stack — not just `pytest` and not just a mocked
+preview:**
+1. Installed and started real Redis (`brew install redis`) and a real Celery worker consuming the
+   real queue — `apps/agents/tasks.py::run_receipt_processor` running for real, not `.apply()`'d
+   directly like the automated tests do.
+2. Generated a synthetic but genuine receipt image (Pillow, plain text drawn onto a PNG: vendor,
+   line items, a total) and uploaded it through the actual browser UI (simulated via
+   `DataTransfer`/`File`, since there's no real filesystem dialog to click in this environment).
+3. Watched the workflow move `pending` → `running` (polling, live) → `needs_review`, confirmed via
+   `lsof` that the delay was the same real IPv6-blackhole-then-IPv4-fallback quirk noted in step 3
+   (a `SYN_SENT` connection sitting open to one of Gemini's real IPv6 addresses) — not a bug, just
+   this sandbox's networking.
+4. Gemini correctly read the image and extracted **the exact vendor name, total, and date** that
+   were drawn onto it — proof the multimodal path (image bytes → Gemini → `ReceiptExtraction` →
+   review form) genuinely works, not just that it doesn't crash.
+5. Clicked "Confirm & save" in the real UI, then fetched `/api/expenses/1/` directly and got back
+   a real, correctly-populated `Expense` row linked to the receipt.
+6. **Found a real, separate limitation in the process, not injected on purpose:** the default
+   SimpleJWT access token lifetime (5 minutes) is shorter than this sandbox's IPv6 delay, so the
+   token expired mid-poll. React Query's default behavior (keep showing last-good data on a failed
+   background refetch) meant the UI didn't break, just stopped updating — signing in again
+   immediately showed the correct, current state. **No refresh-token flow exists yet** — logged as
+   a known gap, not fixed now, since building it wasn't in this step's scope.
+
 ## Key decisions & deviations (know these before extending)
 
 1. **Django 5.2** (spec said "Django 5"; plan first said `<5.2`). The only Python on this machine is
@@ -275,6 +338,24 @@ API at http://localhost:8000/api/ · frontend: `cd frontend && npm run dev` → 
 
 **Manual auth smoke test:** see the "Auth smoke test" section in [`README.md`](README.md).
 
+**Running the full stack without Docker (what this sandbox actually uses):**
+```bash
+# backend (SQLite, no Postgres/Docker needed) + frontend, via the preview tool's launch.json:
+#   configuration "backend"  -> backend/scripts/dev-server.sh, port 8000
+#   configuration "frontend" -> npm run dev --prefix frontend, port 3000
+# or by hand:
+bash backend/scripts/dev-server.sh          # migrates dev.sqlite3, runs on :8000
+cd frontend && npm run dev                   # :3000
+
+# separately, for the agent pipeline to actually run (not just enqueue and sit pending):
+brew install redis && redis-server &         # if not already running
+cd backend && source .venv/bin/activate
+DJANGO_SETTINGS_MODULE=config.settings.dev DATABASE_URL="sqlite:///$(pwd)/dev.sqlite3" \
+  DJANGO_SECRET_KEY="dev-only-not-for-production-please-change" \
+  celery -A config worker --loglevel=info
+```
+Seed a tenant/user the same way as the auth smoke test, then use the app at `localhost:3000`.
+
 ## What's NOT done yet (the remaining build order)
 
 Per [`CLAUDE.md`](CLAUDE.md), build the **Receipt Processor as a vertical slice** next, in order:
@@ -290,8 +371,9 @@ Per [`CLAUDE.md`](CLAUDE.md), build the **Receipt Processor as a vertical slice*
       `ExpenseViewSet` (full CRUD) and `AgentWorkflowViewSet`'s `confirm`/`reject` actions
       (not explicitly named in the build order, but step 6's frontend needs something to call,
       and step 7 wires `AuditLog` to it).
-- [ ] **Step 6** — frontend: upload zone → React Query mutation → poll workflow status → review/confirm
-      UI (Zustand only for ephemeral UI state).
+- [x] **Step 6** — frontend: upload zone → React Query mutation → poll workflow status → review/confirm
+      UI (Zustand only for ephemeral UI state). Manually verified against a real running stack
+      (see the writeup above) — real Gemini call, correct extraction, correct saved Expense.
 - [ ] **Step 7** — `AuditLog` wired to the confirm action (`AgentWorkflowService.approve()` /
       `.reject()` in `apps/agents/services.py` are where the `AuditLog.objects.create(...)` calls
       will go).
@@ -311,16 +393,21 @@ Then generalize to the other three agents (Invoice Chaser, Expense Approver, Mon
   writeup above for the real bug this caused).
 - **TDD:** write the failing test, watch it fail, implement, watch it pass, commit. Small commits.
 - **Every LLM output** must be parsed into a Pydantic model before touching the DB.
+- **React Query owns all server state; Zustand owns only ephemeral UI state** — don't blur this.
+  A session token is neither; it gets its own small module (`lib/auth.ts`), not Zustand.
+- **A green `pytest` run does not mean the feature works in a browser.** CORS, token expiry,
+  timing, and real third-party API behavior are all invisible to the Django test client. Run it
+  for real — see step 6's writeup above for two bugs/gaps this caught that automated tests could
+  not have.
 - **Do a review** and ask a "why this over that?" design question after any non-trivial code (per the
   practice format in the user's global setup).
 
 ## Suggested first move in a new session
 
 1. `git branch --show-current` → confirm on `feat/tenant-foundation` (or merge to `main` first).
-2. Skim `backend/apps/tenancy/`, `backend/apps/expenses/`, and `backend/apps/agents/` (`llm.py`,
-   `models.py`, `services.py`, `tasks.py`, `views.py`) to load the isolation model, expense domain,
-   and the agent/LLM/REST boundary into context.
-3. Start step 6 (frontend: upload zone → React Query mutation → poll workflow status →
-   review/confirm UI) with the design/plan skills, following the same TDD + small-commit rhythm.
-   The backend contract it needs already exists: `POST /api/receipts/`,
-   `GET /api/agent-workflows/{id}/`, `POST /api/agent-workflows/{id}/confirm|reject/`.
+2. Skim `backend/apps/tenancy/`, `backend/apps/expenses/`, `backend/apps/agents/` (`llm.py`,
+   `models.py`, `services.py`, `tasks.py`, `views.py`), and `frontend/src/` (`lib/`, `hooks/`,
+   `components/`) to load the isolation model, expense domain, agent/LLM/REST boundary, and the
+   frontend into context.
+3. Start step 7 (`AuditLog` wired to the confirm/reject actions in `AgentWorkflowService`) with the
+   design/plan skills, following the same TDD + small-commit rhythm.

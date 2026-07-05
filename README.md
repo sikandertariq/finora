@@ -8,12 +8,14 @@ agent action is reviewable, reversible, and logged.
 
 ## Status
 
-**Build-order steps 1-5 complete:** the multi-tenant isolation layer; `Expense`/
+**Build-order steps 1-6 complete:** the multi-tenant isolation layer; `Expense`/
 `Receipt` models + `ExpenseService`; an `LLMProvider` protocol with a real
 `GeminiProvider`; an `AgentWorkflow` state machine + Celery task that runs the
-Receipt Processor against Gemini; and thin REST endpoints for expenses, receipt
-upload, and confirming/rejecting a workflow. See [`HANDOFF.md`](HANDOFF.md) for
-the full detail. The frontend and the audit log come next.
+Receipt Processor against Gemini; thin REST endpoints for expenses, receipt
+upload, and confirming/rejecting a workflow; and a working Next.js frontend
+(sign-in, upload, live-polling review/confirm UI). Manually verified end-to-end
+against a real Gemini call with a real receipt image. See [`HANDOFF.md`](HANDOFF.md)
+for the full detail. The audit log comes next.
 
 ## Layout
 
@@ -33,6 +35,16 @@ docker compose exec django python manage.py migrate
 
 - API: http://localhost:8000/api/
 - Frontend (separately): `cd frontend && npm run dev` → http://localhost:3000
+
+## Run without Docker (this sandbox's usual setup)
+
+```bash
+bash backend/scripts/dev-server.sh   # SQLite, migrates automatically, :8000
+cd frontend && npm run dev           # :3000, reads NEXT_PUBLIC_API_BASE_URL (see .env.local.example)
+```
+For the AI pipeline to actually run end-to-end (not just sit at `pending`), also run a real Redis
++ Celery worker — see the "Running the full stack without Docker" section in
+[`HANDOFF.md`](HANDOFF.md) for the exact commands.
 
 ## Backend tests
 
@@ -106,3 +118,8 @@ curl -s -X POST localhost:8000/api/agent-workflows/1/reject/ \
   view (after Django middleware), so `request.auth` is unset in middleware. The
   middleware validates the bearer token via SimpleJWT directly to resolve the
   tenant before the view runs.
+- **Frontend state split is deliberate:** React Query owns all server state
+  (the workflow, its status, its data); Zustand owns exactly one thing —
+  which workflow is currently open for review (`activeWorkflowId`). The auth
+  token is neither, and gets its own small module (`lib/auth.ts`) instead of
+  being forced into one of the two.
