@@ -4,6 +4,7 @@ import mimetypes
 from pydantic import ValidationError
 
 from apps.expenses.schemas import ReceiptExtraction
+from apps.expenses.services import ExpenseService
 
 from .llm import LLMMessage, LLMProvider
 from .models import AgentWorkflow
@@ -56,6 +57,47 @@ class ReceiptProcessorService:
                 image_mime_type=mime_type,
             ),
         ]
+
+
+class AgentWorkflowService:
+    """Everything a human (via an endpoint) does to a workflow once it needs review.
+
+    Kept separate from ReceiptProcessorService: that one runs the AI, this one runs what
+    happens to its output — starting a run and approving/rejecting are both things a
+    caller outside the AI step needs, not part of the extraction pipeline itself.
+    """
+
+    @staticmethod
+    def start_receipt_processing(receipt) -> AgentWorkflow:
+        workflow = AgentWorkflow.objects.create(receipt=receipt)
+        from .tasks import run_receipt_processor  # local import: tasks.py imports this module
+
+        run_receipt_processor.delay(tenant_id=receipt.tenant_id, workflow_id=workflow.id)
+        return workflow
+
+    @staticmethod
+    def approve(workflow: AgentWorkflow, *, reviewed_by, overrides: dict | None = None) -> AgentWorkflow:
+        data = workflow.extracted_data
+        fields = {
+            "vendor": data.get("vendor"),
+            "amount": data.get("amount"),
+            "currency": data.get("currency", "USD"),
+            "category": data.get("category_suggestion") or "",
+            "expense_date": data.get("expense_date"),
+        }
+        for key, value in (overrides or {}).items():
+            if value is not None:
+                fields[key] = value
+        expense = ExpenseService.create(
+            created_by=reviewed_by, receipt=workflow.receipt, **fields
+        )
+        workflow.mark_approved(reviewed_by=reviewed_by, resulting_expense=expense)
+        return workflow
+
+    @staticmethod
+    def reject(workflow: AgentWorkflow, *, reviewed_by) -> AgentWorkflow:
+        workflow.mark_rejected(reviewed_by=reviewed_by)
+        return workflow
 
 
 def _strip_code_fence(text: str) -> str:
