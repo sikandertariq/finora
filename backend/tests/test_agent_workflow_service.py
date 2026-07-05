@@ -2,7 +2,7 @@ import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.agents import tasks
-from apps.agents.models import AgentWorkflow
+from apps.agents.models import AgentWorkflow, AuditLog
 from apps.agents.services import AgentWorkflowService
 from apps.expenses.models import Receipt
 from apps.tenancy import context
@@ -66,6 +66,23 @@ def test_approve_creates_an_expense_from_extracted_data():
     assert workflow.reviewed_by_id == user.id
 
 
+def test_approve_writes_an_audit_log_entry():
+    user = UserFactory()
+    receipt = _receipt(user)
+    workflow = AgentWorkflow.objects.create(receipt=receipt)
+    workflow.mark_needs_review(
+        extracted_data={"vendor": "Staples", "amount": "42.50", "expense_date": "2026-07-01"}
+    )
+
+    AgentWorkflowService.approve(workflow, reviewed_by=user, overrides={"vendor": "Staples Inc."})
+
+    log = AuditLog.objects.get(workflow=workflow)
+    assert log.actor_id == user.id
+    assert log.action == "approved"
+    assert log.metadata["resulting_expense_id"] == workflow.resulting_expense_id
+    assert log.metadata["overrides"] == {"vendor": "Staples Inc."}
+
+
 def test_approve_lets_a_human_override_the_extracted_data_before_saving():
     user = UserFactory()
     receipt = _receipt(user)
@@ -96,3 +113,16 @@ def test_reject_marks_rejected_without_creating_an_expense():
     assert workflow.status == AgentWorkflow.Status.REJECTED
     assert workflow.resulting_expense is None
     assert workflow.reviewed_by_id == user.id
+
+
+def test_reject_writes_an_audit_log_entry():
+    user = UserFactory()
+    receipt = _receipt(user)
+    workflow = AgentWorkflow.objects.create(receipt=receipt)
+    workflow.mark_needs_review(extracted_data={"vendor": "Staples"})
+
+    AgentWorkflowService.reject(workflow, reviewed_by=user)
+
+    log = AuditLog.objects.get(workflow=workflow)
+    assert log.actor_id == user.id
+    assert log.action == "rejected"

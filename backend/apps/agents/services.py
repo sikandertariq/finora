@@ -7,7 +7,7 @@ from apps.expenses.schemas import ReceiptExtraction
 from apps.expenses.services import ExpenseService
 
 from .llm import LLMMessage, LLMProvider
-from .models import AgentWorkflow
+from .models import AgentWorkflow, AuditLog
 
 _SYSTEM_PROMPT = (
     "You are a receipt-extraction assistant. Given a photo or scan of a receipt, respond "
@@ -92,11 +92,18 @@ class AgentWorkflowService:
             created_by=reviewed_by, receipt=workflow.receipt, **fields
         )
         workflow.mark_approved(reviewed_by=reviewed_by, resulting_expense=expense)
+        AuditLog.objects.create(
+            workflow=workflow,
+            actor=reviewed_by,
+            action="approved",
+            metadata={"resulting_expense_id": expense.id, "overrides": overrides or {}},
+        )
         return workflow
 
     @staticmethod
     def reject(workflow: AgentWorkflow, *, reviewed_by) -> AgentWorkflow:
         workflow.mark_rejected(reviewed_by=reviewed_by)
+        AuditLog.objects.create(workflow=workflow, actor=reviewed_by, action="rejected")
         return workflow
 
 
