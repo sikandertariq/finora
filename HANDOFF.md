@@ -20,11 +20,14 @@
 - **Build-order step 4 is DONE and green:** `AgentWorkflow` model (full status state machine) +
   `ReceiptProcessorService` (LLM call → validate → land in `needs_review`) + the Celery task that
   runs it, using the real `GeminiProvider` with a live key.
+- **Build-order step 5 is DONE and green:** thin REST endpoints — `ExpenseViewSet` (full CRUD),
+  `POST /api/receipts/` (upload → starts the agent), and `AgentWorkflowViewSet` (list/retrieve +
+  `confirm`/`reject` actions). All business logic stayed in `ExpenseService` /
+  `AgentWorkflowService` (new); the view layer only parses/validates/delegates/responds.
 - **All work is on branch `feat/tenant-foundation`**, **not merged to `main`**, **no git remote** configured.
-- **Backend tests: 55/55 passing.** Frontend builds clean.
-- **Next up:** build-order step 5 — receipt upload endpoint (thin viewset → serializer →
-  `ExpenseService`), which is also where a "confirm"/"reject" endpoint will need to exist so the
-  frontend (step 6) can act on a `needs_review` workflow.
+- **Backend tests: 73/73 passing.** Frontend builds clean.
+- **Next up:** build-order step 6 — frontend: upload zone → React Query mutation → poll workflow
+  status → review/confirm UI (Zustand only for ephemeral UI state).
 
 ## What exists right now
 
@@ -43,8 +46,9 @@ finora/
 │  ├─ apps/tenancy/          # THE isolation layer (see below)
 │  ├─ apps/expenses/         # Expense/Receipt models + ExpenseService (step 2) + schemas.py (step 3)
 │  ├─ apps/agents/           # LLMProvider + GeminiProvider (step 3) + AgentWorkflow +
-│  │                         # ReceiptProcessorService + Celery task (step 4)
-│  ├─ tests/                 # pytest suite + throwaway ScopedThing model + factories.py
+│  │                         # ReceiptProcessorService + Celery task (step 4) +
+│  │                         # AgentWorkflowService + REST endpoints (step 5)
+│  ├─ tests/                 # pytest suite + throwaway ScopedThing model + factories.py + conftest.py
 │  ├─ pyproject.toml         # deps + pytest config
 │  └─ .venv/                 # local venv (gitignored)
 └─ frontend/                 # Next.js 15 app shell ("Finora — coming soon")
@@ -139,6 +143,54 @@ Real Gemini calls were smoke-tested against the live API (multimodal image input
 the key you provided — see the "How to run / verify" section below for the exact commands if you
 want to re-run them yourself.
 
+### REST endpoints (`backend/apps/expenses/views.py`, `apps/agents/views.py`, `serializers.py`) — step 5
+
+| Endpoint | Does |
+|---|---|
+| `POST /api/expenses/`, full CRUD | `ExpenseViewSet` — thin `ModelViewSet`; `ExpenseSerializer.create()`/`update()` call `ExpenseService`, translating a raised `ValueError` (e.g. non-positive amount) into a DRF `ValidationError` so it's a 400, not a 500. This is the one existing rule (from step 2) actually reachable over HTTP for the first time. |
+| `POST /api/receipts/` | `ReceiptUploadView` — validates a `file` was sent, creates the `Receipt`, then hands off entirely to `AgentWorkflowService.start_receipt_processing()`. Returns the new `AgentWorkflow` (status `pending`), not the `Receipt` — that's the resource the client actually needs to poll. |
+| `GET /api/agent-workflows/`, `/{id}/` | `AgentWorkflowViewSet` — read-only list/retrieve, for step 6's polling. |
+| `POST /api/agent-workflows/{id}/confirm/` | Optional body lets a human correct any field before it's saved (e.g. `{"vendor": "Staples Inc."}`) — everything omitted is taken as-is from what the AI extracted. Calls `AgentWorkflowService.approve()`, which builds `ExpenseService.create()`'s kwargs from `extracted_data` + overrides, then marks the workflow `approved` and links the resulting `Expense`. |
+| `POST /api/agent-workflows/{id}/reject/` | Marks `rejected`. No `Expense` is created. |
+
+**New service:** `AgentWorkflowService` (in `apps/agents/services.py`, alongside `ReceiptProcessorService`)
+holds `start_receipt_processing()`, `approve()`, `reject()` — the human-facing actions on a
+workflow, as opposed to `ReceiptProcessorService`, which is the AI step itself. `approve()` reuses
+`ExpenseService.create()` — the exact call a manual "add expense" would make — so a human
+confirming an AI's extraction and a human typing an expense by hand are indistinguishable to the
+database once they land.
+
+**A real bug the tests caught immediately:** the first draft of both viewsets set
+`queryset = Expense.objects.all()` as a class attribute. That expression runs once, at import
+time, when Django loads the URLconf — long before any request has set a tenant in context — so it
+immediately raised `TenantContextRequired` and broke every test. Fixed by overriding
+`get_queryset()` instead, which DRF calls fresh on every request, by which point the middleware has
+already set the tenant. Rule of thumb going forward: any queryset built from a `TenantScopedModel`
+inside a view must be inside a method, never a bare class attribute.
+
+**A second, more subtle bug the automated tests did *not* catch — a manual smoke test against a
+real running server did.** Every existing Celery test called `.apply()` (`echo_current_tenant.apply(...)`,
+`run_receipt_processor.apply(...)`) — a synchronous, direct call that never goes through
+`apply_async`. The real code path (`AgentWorkflowService.start_receipt_processing`) calls `.delay()`,
+which does go through `apply_async`, which runs a pre-flight check validating kwargs against the
+task's own `run()` signature *before* `TenantBoundTask.__call__` ever gets a chance to strip
+`tenant_id` out. Since `run_receipt_processor(workflow_id)` never declares `tenant_id`, every real
+`.delay()` call raised `TypeError: run_receipt_processor() got an unexpected keyword argument
+'tenant_id'` — a 500 on the one endpoint this entire slice exists to support, invisible to all 72
+tests that existed at the time. **Fixed with `typing = False` on `TenantBoundTask`**
+(`apps/tenancy/tasks.py`), which disables that pre-flight check for anything built on this base —
+correct, since the base's whole design is to accept a kwarg the concrete task doesn't declare.
+Added a regression test (`test_task_can_be_dispatched_via_delay_not_just_apply` in
+`tests/test_tasks.py`) that calls `.delay()`, not `.apply()`, and verified it actually fails
+without the fix before moving on. **Lesson for future steps: `.apply()` in a test is not a
+substitute for at least one `.delay()`/`.apply_async()` call somewhere** — they exercise different
+Celery code paths and can diverge exactly like this.
+
+**Why `POST /api/receipts/` returns an `AgentWorkflow`, not a `Receipt`:** the receipt file itself
+isn't what the frontend polls or shows a review UI for — the workflow tracking its processing is.
+Naming the URL after the resource being uploaded (`receipts`) while returning the resource that
+matters next (the workflow) was a deliberate mismatch, not an oversight.
+
 ## Key decisions & deviations (know these before extending)
 
 1. **Django 5.2** (spec said "Django 5"; plan first said `<5.2`). The only Python on this machine is
@@ -173,7 +225,7 @@ want to re-run them yourself.
 ```bash
 cd backend
 source .venv/bin/activate          # venv already created on this machine
-python -m pytest -q                # expect: 55 passed
+python -m pytest -q                # expect: 73 passed
 python manage.py check             # expect: no issues
 ```
 
@@ -212,7 +264,6 @@ to resolve because `generativelanguage.googleapis.com` has IPv6 addresses and th
 silently drops outbound IPv6 (no fast failure) before the SDK falls back to IPv4. A plain `curl`
 to the same host over IPv4 responds instantly. If a real call ever seems to hang, it's this, not
 a broken key or a broken `GeminiProvider`.
-```
 
 **Full stack (real runtime — needs Docker daemon running):**
 ```bash
@@ -235,13 +286,15 @@ Per [`CLAUDE.md`](CLAUDE.md), build the **Receipt Processor as a vertical slice*
 - [x] **Step 4** — `AgentWorkflow` model with status state machine
       (`pending → running → needs_review → approved/rejected`) + a Celery task (use `TenantBoundTask`)
       that runs the processor and lands in `needs_review`.
-- [ ] **Step 5** — receipt upload endpoint (thin) → serializer → `ExpenseService`. This is also the
-      natural place for a confirm/reject endpoint (not explicitly named in the build order, but
-      step 6's frontend needs something to call, and step 7 wires `AuditLog` to it) — it would call
-      `AgentWorkflow.mark_approved()` + `ExpenseService.create()`, or `mark_rejected()`.
+- [x] **Step 5** — receipt upload endpoint (thin) → serializer → `ExpenseService`, plus
+      `ExpenseViewSet` (full CRUD) and `AgentWorkflowViewSet`'s `confirm`/`reject` actions
+      (not explicitly named in the build order, but step 6's frontend needs something to call,
+      and step 7 wires `AuditLog` to it).
 - [ ] **Step 6** — frontend: upload zone → React Query mutation → poll workflow status → review/confirm
       UI (Zustand only for ephemeral UI state).
-- [ ] **Step 7** — `AuditLog` wired to the confirm action.
+- [ ] **Step 7** — `AuditLog` wired to the confirm action (`AgentWorkflowService.approve()` /
+      `.reject()` in `apps/agents/services.py` are where the `AuditLog.objects.create(...)` calls
+      will go).
 
 Then generalize to the other three agents (Invoice Chaser, Expense Approver, Monthly Close) + Co-Pilot.
 
@@ -251,6 +304,11 @@ Then generalize to the other three agents (Invoice Chaser, Expense Approver, Mon
   Services never touch `request`/`Response` so agents can reuse them.
 - **New tenant-owned model?** Inherit `TenantScopedModel` — you get isolation for free; never write
   `.filter(tenant=...)` by hand.
+- **Never set `queryset = Model.objects.all()` as a viewset class attribute** on a
+  `TenantScopedModel` — override `get_queryset()` instead (see step 5's writeup above for why).
+- **When testing a Celery task, call `.delay()`/`.apply_async()` at least once, not only
+  `.apply()`** — they go through different Celery code paths and can diverge (see step 5's
+  writeup above for the real bug this caused).
 - **TDD:** write the failing test, watch it fail, implement, watch it pass, commit. Small commits.
 - **Every LLM output** must be parsed into a Pydantic model before touching the DB.
 - **Do a review** and ask a "why this over that?" design question after any non-trivial code (per the
@@ -260,8 +318,9 @@ Then generalize to the other three agents (Invoice Chaser, Expense Approver, Mon
 
 1. `git branch --show-current` → confirm on `feat/tenant-foundation` (or merge to `main` first).
 2. Skim `backend/apps/tenancy/`, `backend/apps/expenses/`, and `backend/apps/agents/` (`llm.py`,
-   `models.py`, `services.py`, `tasks.py`) to load the isolation model, expense domain, and the
-   agent/LLM boundary into context.
-3. Start step 5 (receipt upload endpoint + a confirm/reject endpoint, thin viewset → serializer →
-   `ExpenseService` / `AgentWorkflow`) with the design/plan skills, following the same TDD +
-   small-commit rhythm.
+   `models.py`, `services.py`, `tasks.py`, `views.py`) to load the isolation model, expense domain,
+   and the agent/LLM/REST boundary into context.
+3. Start step 6 (frontend: upload zone → React Query mutation → poll workflow status →
+   review/confirm UI) with the design/plan skills, following the same TDD + small-commit rhythm.
+   The backend contract it needs already exists: `POST /api/receipts/`,
+   `GET /api/agent-workflows/{id}/`, `POST /api/agent-workflows/{id}/confirm|reject/`.

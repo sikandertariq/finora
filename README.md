@@ -8,10 +8,12 @@ agent action is reviewable, reversible, and logged.
 
 ## Status
 
-**Build-order step 1 complete:** monorepo skeleton + the multi-tenant isolation
-layer (tenant context, `TenantScopedModel` + fail-loud manager, JWT-claim
-middleware, tenant-bound Celery base, tenant-aware auth + `whoami`). Agents,
-receipts, expenses, and the audit log come next.
+**Build-order steps 1-5 complete:** the multi-tenant isolation layer; `Expense`/
+`Receipt` models + `ExpenseService`; an `LLMProvider` protocol with a real
+`GeminiProvider`; an `AgentWorkflow` state machine + Celery task that runs the
+Receipt Processor against Gemini; and thin REST endpoints for expenses, receipt
+upload, and confirming/rejecting a workflow. See [`HANDOFF.md`](HANDOFF.md) for
+the full detail. The frontend and the audit log come next.
 
 ## Layout
 
@@ -63,6 +65,34 @@ curl -s -X POST localhost:8000/api/token/ \
 
 curl -s localhost:8000/api/whoami/ -H "Authorization: Bearer <access-token>"
 # -> {"user":"alice","tenant_id":1}
+```
+
+## Expense & Receipt Processor smoke test
+
+Using the `<access-token>` from above:
+
+```bash
+# a manual expense, no AI involved
+curl -s -X POST localhost:8000/api/expenses/ \
+  -H "Authorization: Bearer <access-token>" -H 'Content-Type: application/json' \
+  -d '{"vendor":"Staples","amount":"42.50","expense_date":"2026-07-01"}'
+
+# upload a receipt -> creates a Receipt + an AgentWorkflow, starts the Celery task
+curl -s -X POST localhost:8000/api/receipts/ \
+  -H "Authorization: Bearer <access-token>" -F "file=@/path/to/receipt.jpg"
+# -> {"id": 1, "status": "pending", "receipt": {...}, ...}   (needs the celery worker running)
+
+# poll it (status moves pending -> running -> needs_review)
+curl -s localhost:8000/api/agent-workflows/1/ -H "Authorization: Bearer <access-token>"
+
+# confirm it -> creates the Expense, links it back to the workflow
+curl -s -X POST localhost:8000/api/agent-workflows/1/confirm/ \
+  -H "Authorization: Bearer <access-token>" -H 'Content-Type: application/json' -d '{}'
+# add e.g. {"vendor": "Staples Inc."} instead of {} to correct the AI before saving
+
+# or reject it instead -> no Expense created
+curl -s -X POST localhost:8000/api/agent-workflows/1/reject/ \
+  -H "Authorization: Bearer <access-token>" -H 'Content-Type: application/json' -d '{}'
 ```
 
 ## Architecture notes
