@@ -9,10 +9,13 @@
   monorepo skeleton (Django backend, Next.js frontend, Docker Compose).
 - **Build-order step 2 is DONE and green:** `Expense` / `Receipt` models (both tenant-scoped) +
   `ExpenseService` (create/update/get/list/delete, HTTP-free).
+- **Build-order step 3 is DONE and green:** `LLMProvider` Protocol + `FakeLLMProvider` (the only
+  concrete provider so far — no real API keys yet) + `ReceiptExtraction` Pydantic schema (the
+  validate-or-reject safety boundary).
 - **All work is on branch `feat/tenant-foundation`**, **not merged to `main`**, **no git remote** configured.
-- **Backend tests: 27/27 passing.** Frontend builds clean.
-- **Next up:** build-order step 3 — `LLMProvider` Protocol + `FakeLLMProvider` + `ReceiptExtraction`
-  Pydantic schema.
+- **Backend tests: 39/39 passing.** Frontend builds clean.
+- **Next up:** build-order step 4 — `AgentWorkflow` model (status state machine) + a Celery task
+  (via `TenantBoundTask`) that runs the Receipt Processor and lands in `needs_review`.
 
 ## What exists right now
 
@@ -29,7 +32,8 @@ finora/
 ├─ backend/                  # Django 5.2 + DRF
 │  ├─ config/                # settings (base/dev/test), urls, celery, wsgi/asgi
 │  ├─ apps/tenancy/          # THE isolation layer (see below)
-│  ├─ apps/expenses/         # Expense/Receipt models + ExpenseService (step 2)
+│  ├─ apps/expenses/         # Expense/Receipt models + ExpenseService (step 2) + schemas.py (step 3)
+│  ├─ apps/agents/           # LLMProvider protocol + FakeLLMProvider (step 3, no models yet)
 │  ├─ tests/                 # pytest suite + throwaway ScopedThing model + factories.py
 │  ├─ pyproject.toml         # deps + pytest config
 │  └─ .venv/                 # local venv (gitignored)
@@ -70,6 +74,23 @@ rules live in one place (`ExpenseService`) so that later, when the AI agent proc
 the background, it calls the exact same code path a human clicking "save" would — no duplicated
 rules to drift out of sync.
 
+### Agents / LLM boundary (`backend/apps/agents/llm.py`, `backend/apps/expenses/schemas.py`) — step 3
+
+| File | Responsibility |
+|---|---|
+| `apps/agents/llm.py` | `LLMProvider` — a `Protocol` (structural interface, not a base class) any concrete provider must satisfy. `LLMMessage` / `LLMResponse` are the plain data shapes that cross that boundary. `FakeLLMProvider` — the only concrete provider right now; returns a canned string (or a queue of them) instead of calling a real API, and records every call so tests can assert on it. |
+| `apps/expenses/schemas.py` | `ReceiptExtraction` — a Pydantic model describing exactly what a valid receipt extraction looks like (vendor, amount, currency, date, line items, a confidence score, and a `missing_fields` list the agent can use instead of guessing). |
+
+**Plain-English version:** `LLMProvider` is a contract, not a specific AI vendor — anything that can
+take a list of messages and hand back text satisfies it, whether that's today's fake, or OpenAI/
+Anthropic later. Because `ExpenseService` and future agent code will depend on this *contract*
+rather than a concrete class, switching providers is a one-line config change, and tests never make
+a real network call. `ReceiptExtraction` is the "safety gate": raw text out of an LLM is just a
+string until it's been squeezed through this schema — if it doesn't fit (missing vendor, a
+negative amount, confidence outside 0–1), Pydantic refuses it before it ever reaches the database.
+`tests/test_llm_to_extraction_pipeline.py` proves both pieces work together: a well-formed fake
+response becomes a validated `ReceiptExtraction`; a malformed one raises and stops cold.
+
 ## Key decisions & deviations (know these before extending)
 
 1. **Django 5.2** (spec said "Django 5"; plan first said `<5.2`). The only Python on this machine is
@@ -96,7 +117,7 @@ rules to drift out of sync.
 ```bash
 cd backend
 source .venv/bin/activate          # venv already created on this machine
-python -m pytest -q                # expect: 27 passed
+python -m pytest -q                # expect: 39 passed
 python manage.py check             # expect: no issues
 ```
 
@@ -116,7 +137,7 @@ Per [`CLAUDE.md`](CLAUDE.md), build the **Receipt Processor as a vertical slice*
 
 - [x] **Step 2** — `Expense` / `Receipt` models (both inherit `TenantScopedModel`) + `ExpenseService`
       (HTTP-free business logic; thin viewset → serializer → service → model).
-- [ ] **Step 3** — `LLMProvider` Protocol + a `FakeLLMProvider` (decided: fake-only first, no real API
+- [x] **Step 3** — `LLMProvider` Protocol + a `FakeLLMProvider` (decided: fake-only first, no real API
       keys yet) + a `ReceiptExtraction` Pydantic schema (the validate-or-reject safety boundary).
 - [ ] **Step 4** — `AgentWorkflow` model with status state machine
       (`pending → running → needs_review → approved/rejected`) + a Celery task (use `TenantBoundTask`)
@@ -142,7 +163,8 @@ Then generalize to the other three agents (Invoice Chaser, Expense Approver, Mon
 ## Suggested first move in a new session
 
 1. `git branch --show-current` → confirm on `feat/tenant-foundation` (or merge to `main` first).
-2. Skim `backend/apps/tenancy/` and `backend/apps/expenses/` to load the isolation model + expense
-   domain into context.
-3. Start step 3 (`LLMProvider` Protocol + `FakeLLMProvider` + `ReceiptExtraction` Pydantic schema)
-   with the design/plan skills, following the same TDD + small-commit rhythm.
+2. Skim `backend/apps/tenancy/`, `backend/apps/expenses/`, and `backend/apps/agents/llm.py` to load
+   the isolation model, expense domain, and LLM boundary into context.
+3. Start step 4 (`AgentWorkflow` model + a `TenantBoundTask`-based Celery task that runs the Receipt
+   Processor and lands in `needs_review`) with the design/plan skills, following the same TDD +
+   small-commit rhythm.
