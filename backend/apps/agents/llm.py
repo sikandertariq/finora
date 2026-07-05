@@ -6,6 +6,8 @@ from typing import Protocol, runtime_checkable
 class LLMMessage:
     role: str
     content: str
+    image: bytes | None = None
+    image_mime_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -30,7 +32,8 @@ class LLMProvider(Protocol):
 class FakeLLMProvider:
     """Dev/test-only provider. Returns pre-programmed responses instead of calling a real API.
 
-    The only concrete provider for now (decided: fake-only until real API keys are wired up).
+    Real agent code uses GeminiProvider; automated tests inject this instead so they stay
+    fast, free, and deterministic — no network call, no API quota, no flake.
     """
 
     def __init__(self, response: str = "", responses: list[str] | None = None):

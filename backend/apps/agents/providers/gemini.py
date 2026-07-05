@@ -26,7 +26,7 @@ class GeminiProvider:
     ) -> LLMResponse:
         system_instruction = "\n".join(m.content for m in messages if m.role == "system") or None
         contents = [
-            types.Content(role=_ROLE_MAP.get(m.role, "user"), parts=[types.Part(text=m.content)])
+            types.Content(role=_ROLE_MAP.get(m.role, "user"), parts=_parts_for(m))
             for m in messages
             if m.role != "system"
         ]
@@ -36,3 +36,10 @@ class GeminiProvider:
             config=types.GenerateContentConfig(system_instruction=system_instruction),
         )
         return LLMResponse(content=response.text or "")
+
+
+def _parts_for(message: LLMMessage) -> list[types.Part]:
+    parts = [types.Part(text=message.content)]
+    if message.image is not None:
+        parts.append(types.Part.from_bytes(data=message.image, mime_type=message.image_mime_type))
+    return parts

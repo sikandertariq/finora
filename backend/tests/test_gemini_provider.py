@@ -47,6 +47,21 @@ def test_system_messages_become_system_instruction_not_a_content_turn():
     assert len(call["contents"]) == 1
 
 
+def test_message_image_is_sent_as_an_extra_part():
+    client = _FakeGenaiClient(response_text="ok")
+    provider = GeminiProvider(client=client, model="gemini-2.5-flash")
+
+    provider.complete(
+        [LLMMessage(role="user", content="Read this.", image=b"bytes", image_mime_type="image/jpeg")]
+    )
+
+    parts = client.models.calls[0]["contents"][0].parts
+    assert len(parts) == 2
+    assert parts[0].text == "Read this."
+    assert parts[1].inline_data.data == b"bytes"
+    assert parts[1].inline_data.mime_type == "image/jpeg"
+
+
 def test_assistant_role_is_translated_to_geminis_model_role():
     client = _FakeGenaiClient(response_text="ok")
     provider = GeminiProvider(client=client, model="gemini-2.5-flash")
