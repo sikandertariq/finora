@@ -13,6 +13,13 @@ class TenantBoundTask(Task):
     for the next task never inherits a stale tenant.
     """
 
+    # `tenant_id` is real to every task using this base, but not part of the concrete
+    # task's own `run()` signature (this base intercepts and strips it before `run` sees
+    # it). Celery's default argument-checking validates kwargs against `run`'s signature
+    # at `.delay()`/`.apply_async()` time and would reject `tenant_id` as unexpected —
+    # `typing = False` disables that check for anything built on this base.
+    typing = False
+
     def __call__(self, *args, **kwargs):
         tenant_id = kwargs.pop("tenant_id", None)
         if tenant_id is not None:
