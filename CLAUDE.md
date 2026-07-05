@@ -3,8 +3,13 @@
 Project context and engineering guardrails for Claude Code. Read this before writing or changing anything.
 
 > **▶ Current status / where to continue:** see [`HANDOFF.md`](HANDOFF.md).
-> Build-order step 1 (tenant isolation foundation) is done and tested on branch
-> `feat/tenant-foundation`. Next up: step 2 (`Expense`/`Receipt` + `ExpenseService`).
+> Build-order steps 1–7 (the full Receipt Processor vertical slice — tenant isolation, Expense/
+> Receipt + ExpenseService, the LLMProvider/Gemini boundary, AgentWorkflow + Celery, REST
+> endpoints, the frontend, and AuditLog) are all done and tested on branch `feat/tenant-foundation`.
+> **The locked build order is complete.** Next is a real decision, not an assumption: which of the
+> other three agents (Invoice Chaser, Expense Approver, Monthly Close) or the Co-Pilot to build
+> next, and whether to generalize `AgentWorkflow`/`AgentWorkflowService` (currently receipt-specific
+> in a few places) before or after that second agent exists. See HANDOFF.md's last section.
 > This spec below is the locked source of truth — do not rewrite it.
 
 ## What we're building
