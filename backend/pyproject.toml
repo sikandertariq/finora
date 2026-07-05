@@ -11,6 +11,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "django-environ>=0.11",
     "pydantic>=2.7",
+    "google-genai>=1.0",
 ]
 
 [dependency-groups]
@@ -19,6 +20,13 @@ dev = [
     "pytest-django>=4.8",
     "factory-boy>=3.3",
 ]
+
+# This project is a Django app run via manage.py, not a distributable package —
+# pytest's pythonpath=["."] already makes apps/config importable. `pip install -e .`
+# is only used to resolve [project.dependencies]; tell setuptools not to look for
+# packages to avoid it guessing between apps/ and config/.
+[tool.setuptools]
+packages = []
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.test"
