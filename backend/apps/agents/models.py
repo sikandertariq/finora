@@ -61,3 +61,28 @@ class AgentWorkflow(TenantScopedModel):
         self.reviewed_by = reviewed_by
         self.status = self.Status.REJECTED
         self.save(update_fields=["reviewed_by", "status", "updated_at"])
+
+
+class AuditLog(TenantScopedModel):
+    """An immutable record of an action taken on an agent workflow.
+
+    Append-only by convention: nothing here ever gets an ``update()`` method — a row is
+    written once, at the moment the action happens, and never touched again. ``action`` is
+    a plain string rather than a choices enum for the same reason ``workflow_type`` is on
+    ``AgentWorkflow``: the other three agents will introduce their own action names later,
+    and none of them should have to edit a shared enum to do it.
+    """
+
+    workflow = models.ForeignKey(AgentWorkflow, on_delete=models.CASCADE, related_name="audit_logs")
+    actor = models.ForeignKey(
+        "auth.User", on_delete=models.SET_NULL, null=True, related_name="audit_logs"
+    )
+    action = models.CharField(max_length=50)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.action} on workflow #{self.workflow_id} by {self.actor}"
