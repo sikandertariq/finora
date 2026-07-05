@@ -1,0 +1,84 @@
+import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
+
+from apps.agents.models import AgentWorkflow
+from apps.expenses.models import Receipt
+from apps.tenancy import context
+
+pytestmark = pytest.mark.django_db
+
+
+def _needs_review_workflow(tenant, extracted_data=None):
+    context.set_current_tenant(tenant.id)
+    try:
+        receipt = Receipt.objects.create(
+            file=SimpleUploadedFile("r.jpg", b"bytes", content_type="image/jpeg")
+        )
+        workflow = AgentWorkflow.objects.create(receipt=receipt)
+        workflow.mark_needs_review(
+            extracted_data=extracted_data
+            or {
+                "vendor": "Staples",
+                "amount": "42.50",
+                "currency": "USD",
+                "category_suggestion": "office supplies",
+                "expense_date": "2026-07-01",
+            }
+        )
+        return workflow
+    finally:
+        context.clear_current_tenant()
+
+
+def test_list_and_retrieve_workflow(authed_client):
+    workflow = _needs_review_workflow(authed_client.tenant)
+
+    list_resp = authed_client.get("/api/agent-workflows/")
+    detail_resp = authed_client.get(f"/api/agent-workflows/{workflow.id}/")
+
+    assert [w["id"] for w in list_resp.data] == [workflow.id]
+    assert detail_resp.data["status"] == AgentWorkflow.Status.NEEDS_REVIEW
+    assert detail_resp.data["extracted_data"]["vendor"] == "Staples"
+
+
+def test_confirm_creates_an_expense_and_marks_approved(authed_client):
+    workflow = _needs_review_workflow(authed_client.tenant)
+
+    resp = authed_client.post(f"/api/agent-workflows/{workflow.id}/confirm/", {}, format="json")
+
+    assert resp.status_code == 200, resp.data
+    assert resp.data["status"] == AgentWorkflow.Status.APPROVED
+    expense = authed_client.get(f"/api/expenses/{resp.data['resulting_expense']}/").data
+    assert expense["vendor"] == "Staples"
+    assert expense["created_by"] == authed_client.user.id
+
+
+def test_confirm_lets_a_human_override_a_field(authed_client):
+    workflow = _needs_review_workflow(authed_client.tenant)
+
+    resp = authed_client.post(
+        f"/api/agent-workflows/{workflow.id}/confirm/",
+        {"vendor": "Staples Inc."},
+        format="json",
+    )
+
+    expense = authed_client.get(f"/api/expenses/{resp.data['resulting_expense']}/").data
+    assert expense["vendor"] == "Staples Inc."
+
+
+def test_reject_marks_rejected_and_creates_no_expense(authed_client):
+    workflow = _needs_review_workflow(authed_client.tenant)
+
+    resp = authed_client.post(f"/api/agent-workflows/{workflow.id}/reject/", {}, format="json")
+
+    assert resp.status_code == 200, resp.data
+    assert resp.data["status"] == AgentWorkflow.Status.REJECTED
+    assert resp.data["resulting_expense"] is None
+
+
+def test_workflow_from_another_tenant_is_not_found(authed_client, other_authed_client):
+    other_workflow = _needs_review_workflow(other_authed_client.tenant)
+
+    resp = authed_client.get(f"/api/agent-workflows/{other_workflow.id}/")
+
+    assert resp.status_code == 404
