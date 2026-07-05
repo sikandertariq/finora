@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 from apps.expenses.serializers import ReceiptSerializer
 
-from .models import AgentWorkflow
+from .models import AgentWorkflow, AuditLog
 
 
 class AgentWorkflowSerializer(serializers.ModelSerializer):
@@ -35,3 +35,10 @@ class ConfirmWorkflowSerializer(serializers.Serializer):
     currency = serializers.CharField(required=False, max_length=3)
     category = serializers.CharField(required=False, allow_blank=True)
     expense_date = serializers.DateField(required=False)
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AuditLog
+        fields = ["id", "workflow", "actor", "action", "metadata", "created_at"]
+        read_only_fields = fields
