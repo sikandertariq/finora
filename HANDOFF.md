@@ -9,13 +9,19 @@
   monorepo skeleton (Django backend, Next.js frontend, Docker Compose).
 - **Build-order step 2 is DONE and green:** `Expense` / `Receipt` models (both tenant-scoped) +
   `ExpenseService` (create/update/get/list/delete, HTTP-free).
-- **Build-order step 3 is DONE and green:** `LLMProvider` Protocol + `FakeLLMProvider` (the only
-  concrete provider so far — no real API keys yet) + `ReceiptExtraction` Pydantic schema (the
-  validate-or-reject safety boundary).
+- **Build-order step 3 is DONE and green:** `LLMProvider` Protocol + `FakeLLMProvider` +
+  `ReceiptExtraction` Pydantic schema (the validate-or-reject safety boundary).
+- **Real provider added (revises the "fake-only" decision):** `GeminiProvider`
+  (`apps/agents/providers/gemini.py`) implements `LLMProvider` against Google's Gemini API
+  (`google-genai` SDK). `FakeLLMProvider` remains what automated tests inject — `GeminiProvider`
+  is unit-tested against a fake `genai.Client` stand-in, never a real network call. **A real
+  `GEMINI_API_KEY` still needs to be set locally** (see "How to run / verify") before step 4's
+  Celery task can call it for real.
 - **All work is on branch `feat/tenant-foundation`**, **not merged to `main`**, **no git remote** configured.
-- **Backend tests: 39/39 passing.** Frontend builds clean.
+- **Backend tests: 42/42 passing.** Frontend builds clean.
 - **Next up:** build-order step 4 — `AgentWorkflow` model (status state machine) + a Celery task
-  (via `TenantBoundTask`) that runs the Receipt Processor and lands in `needs_review`.
+  (via `TenantBoundTask`) that runs the Receipt Processor (using `GeminiProvider`) and lands in
+  `needs_review`.
 
 ## What exists right now
 
@@ -91,6 +97,15 @@ negative amount, confidence outside 0–1), Pydantic refuses it before it ever r
 `tests/test_llm_to_extraction_pipeline.py` proves both pieces work together: a well-formed fake
 response becomes a validated `ReceiptExtraction`; a malformed one raises and stops cold.
 
+**`GeminiProvider`** (`apps/agents/providers/gemini.py`) is the first real (non-fake)
+implementation of `LLMProvider`. It wraps `google.genai.Client`, translating this project's plain
+`LLMMessage` list into Gemini's `Content`/`Part` shape and its `"assistant"` role into Gemini's
+`"model"` role, and folding any `role="system"` messages into `system_instruction` (Gemini has no
+"system" turn in the message list itself). The constructor takes an already-built client, not an
+API key, specifically so `tests/test_gemini_provider.py` can inject a fake stand-in — the real
+`genai.Client(api_key=...)` is only constructed by `GeminiProvider.from_settings()`, which reads
+`GEMINI_API_KEY` / `GEMINI_MODEL` from Django settings.
+
 ## Key decisions & deviations (know these before extending)
 
 1. **Django 5.2** (spec said "Django 5"; plan first said `<5.2`). The only Python on this machine is
@@ -110,6 +125,14 @@ response becomes a validated `ReceiptExtraction`; a malformed one raises and sto
    `MEDIA_ROOT`), not S3/MinIO yet.
 6. **Test-only model:** `backend/tests/models.py::ScopedThing` exists purely to exercise the base
    class; it lives in a throwaway `tests` app registered only in test settings.
+7. **Gemini, not OpenAI/Anthropic, for the first real provider.** CLAUDE.md's example code names
+   OpenAI/Anthropic, but the architecture point — depend on the `LLMProvider` Protocol, not a
+   vendor — holds regardless of which SDK sits behind it. User supplied a Gemini key, so
+   `GeminiProvider` (`apps/agents/providers/gemini.py`, `google-genai` SDK) is the first concrete
+   implementation. Also had to add `[tool.setuptools] packages = []` to `backend/pyproject.toml` —
+   without it, `pip install -e .` broke (setuptools couldn't guess a single package between
+   `apps/` and `config/`); this project was never meant to be an installable package, just a
+   dependency list, so telling setuptools to stop guessing was the fix, not a workaround.
 
 ## How to run / verify
 
@@ -117,8 +140,29 @@ response becomes a validated `ReceiptExtraction`; a malformed one raises and sto
 ```bash
 cd backend
 source .venv/bin/activate          # venv already created on this machine
-python -m pytest -q                # expect: 39 passed
+python -m pytest -q                # expect: 42 passed
 python manage.py check             # expect: no issues
+```
+
+**Wiring a real Gemini key (optional, only needed to actually call the API):**
+```bash
+# backend/.env (read by manage.py / pytest locally) — add:
+GEMINI_API_KEY=your-real-key-here
+GEMINI_MODEL=gemini-2.5-flash        # already the default, override if needed
+
+# also add the same line to the repo-root .env (read by docker-compose) once you're
+# running the Celery worker through Docker, not just the local venv.
+```
+Get a key from Google AI Studio. **Do not paste a real key into chat/commits** — edit the `.env`
+files directly; both are gitignored. Smoke-test it without writing any new code:
+```bash
+python manage.py shell -c "
+from django.conf import settings
+from apps.agents.llm import LLMMessage
+from apps.agents.providers.gemini import GeminiProvider
+p = GeminiProvider.from_settings(settings.GEMINI_API_KEY, settings.GEMINI_MODEL)
+print(p.complete([LLMMessage(role='user', content='Say hi in 3 words.')]).content)
+"
 ```
 
 **Full stack (real runtime — needs Docker daemon running):**
