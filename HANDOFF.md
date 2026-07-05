@@ -17,11 +17,14 @@
   is unit-tested against a fake `genai.Client` stand-in, never a real network call. **A real
   `GEMINI_API_KEY` still needs to be set locally** (see "How to run / verify") before step 4's
   Celery task can call it for real.
+- **Build-order step 4 is DONE and green:** `AgentWorkflow` model (full status state machine) +
+  `ReceiptProcessorService` (LLM call → validate → land in `needs_review`) + the Celery task that
+  runs it, using the real `GeminiProvider` with a live key.
 - **All work is on branch `feat/tenant-foundation`**, **not merged to `main`**, **no git remote** configured.
-- **Backend tests: 42/42 passing.** Frontend builds clean.
-- **Next up:** build-order step 4 — `AgentWorkflow` model (status state machine) + a Celery task
-  (via `TenantBoundTask`) that runs the Receipt Processor (using `GeminiProvider`) and lands in
-  `needs_review`.
+- **Backend tests: 55/55 passing.** Frontend builds clean.
+- **Next up:** build-order step 5 — receipt upload endpoint (thin viewset → serializer →
+  `ExpenseService`), which is also where a "confirm"/"reject" endpoint will need to exist so the
+  frontend (step 6) can act on a `needs_review` workflow.
 
 ## What exists right now
 
@@ -39,7 +42,8 @@ finora/
 │  ├─ config/                # settings (base/dev/test), urls, celery, wsgi/asgi
 │  ├─ apps/tenancy/          # THE isolation layer (see below)
 │  ├─ apps/expenses/         # Expense/Receipt models + ExpenseService (step 2) + schemas.py (step 3)
-│  ├─ apps/agents/           # LLMProvider protocol + FakeLLMProvider (step 3, no models yet)
+│  ├─ apps/agents/           # LLMProvider + GeminiProvider (step 3) + AgentWorkflow +
+│  │                         # ReceiptProcessorService + Celery task (step 4)
 │  ├─ tests/                 # pytest suite + throwaway ScopedThing model + factories.py
 │  ├─ pyproject.toml         # deps + pytest config
 │  └─ .venv/                 # local venv (gitignored)
@@ -104,7 +108,36 @@ implementation of `LLMProvider`. It wraps `google.genai.Client`, translating thi
 "system" turn in the message list itself). The constructor takes an already-built client, not an
 API key, specifically so `tests/test_gemini_provider.py` can inject a fake stand-in — the real
 `genai.Client(api_key=...)` is only constructed by `GeminiProvider.from_settings()`, which reads
-`GEMINI_API_KEY` / `GEMINI_MODEL` from Django settings.
+`GEMINI_API_KEY` / `GEMINI_MODEL` from Django settings. `LLMMessage` also carries an optional
+`image` (bytes) + `image_mime_type`, since a receipt is useless to extract from as text alone —
+`GeminiProvider` sends that as an extra `Part.from_bytes(...)` alongside the text part.
+
+### Agent workflow / Receipt Processor (`backend/apps/agents/models.py`, `services.py`, `tasks.py`) — step 4
+
+| File | Responsibility |
+|---|---|
+| `models.py` | `AgentWorkflow` (`TenantScopedModel`) — the reviewable, reversible row for one agent run. `status` is the state machine from CLAUDE.md (`pending → running → needs_review → approved/rejected`), exposed as small methods (`mark_running`, `mark_needs_review`, `mark_approved`, `mark_rejected`) rather than letting callers poke `.status` directly. `receipt` is a direct FK (not a generic relation) — deliberately not generalized to the other three agents yet. |
+| `services.py` | `ReceiptProcessorService.run(workflow)` — the actual agent: builds a prompt + the receipt's image bytes, calls the injected `LLMProvider`, strips a markdown code fence if Gemini adds one, parses the result through `ReceiptExtraction`. Any failure (bad JSON, failed validation) still lands the workflow in `needs_review` with `error_message` set — **there is no separate "failed" status**, on purpose (see below). |
+| `tasks.py` | `run_receipt_processor(workflow_id)` — a `TenantBoundTask` Celery task. Thin: fetch the row, build a real `GeminiProvider` from settings, hand off to the service. All the actual logic is in the service, so it's unit-tested with zero Celery machinery. |
+
+**Plain-English version:** uploading a receipt creates a `AgentWorkflow` row that starts `pending`.
+A Celery task flips it to `running`, sends the receipt's image + a prompt to Gemini, and validates
+whatever comes back through the same `ReceiptExtraction` safety gate from step 3. Whether that
+succeeds or fails, the row ends up in `needs_review` — a clean extraction carries the data for a
+human to confirm; a failure carries an explanation instead, so "the AI couldn't read this" is
+something a human sees and acts on, not a silent crash. `approved`/`rejected` are defined on the
+model now (full state machine, per CLAUDE.md) but nothing transitions to them yet — that's step 5+,
+once there's an endpoint for a human to actually confirm or reject.
+
+**Why no "failed" status:** CLAUDE.md's spec names exactly four states
+(`pending/running/needs_review/approved/rejected`). Rather than quietly adding a fifth, a
+processing failure is treated as just another reason a human needs to look at this receipt —
+which is what `needs_review` already means. The failure is visible via `error_message`, not a new
+enum value.
+
+Real Gemini calls were smoke-tested against the live API (multimodal image input included) using
+the key you provided — see the "How to run / verify" section below for the exact commands if you
+want to re-run them yourself.
 
 ## Key decisions & deviations (know these before extending)
 
@@ -140,21 +173,20 @@ API key, specifically so `tests/test_gemini_provider.py` can inject a fake stand
 ```bash
 cd backend
 source .venv/bin/activate          # venv already created on this machine
-python -m pytest -q                # expect: 42 passed
+python -m pytest -q                # expect: 55 passed
 python manage.py check             # expect: no issues
 ```
 
-**Wiring a real Gemini key (optional, only needed to actually call the API):**
+**A real Gemini key is already set** in `backend/.env` and the repo-root `.env` (both gitignored —
+**never paste a real key into chat/commits**). If it ever needs replacing, edit those files
+directly:
 ```bash
-# backend/.env (read by manage.py / pytest locally) — add:
+# backend/.env (read by manage.py / pytest locally) and repo-root .env (read by docker-compose):
 GEMINI_API_KEY=your-real-key-here
 GEMINI_MODEL=gemini-2.5-flash        # already the default, override if needed
-
-# also add the same line to the repo-root .env (read by docker-compose) once you're
-# running the Celery worker through Docker, not just the local venv.
 ```
-Get a key from Google AI Studio. **Do not paste a real key into chat/commits** — edit the `.env`
-files directly; both are gitignored. Smoke-test it without writing any new code:
+Get a key from Google AI Studio. Smoke-test it without writing any new code — text-only, and then
+multimodal (this is what actually proves the Receipt Processor's image path works):
 ```bash
 python manage.py shell -c "
 from django.conf import settings
@@ -163,6 +195,23 @@ from apps.agents.providers.gemini import GeminiProvider
 p = GeminiProvider.from_settings(settings.GEMINI_API_KEY, settings.GEMINI_MODEL)
 print(p.complete([LLMMessage(role='user', content='Say hi in 3 words.')]).content)
 "
+
+python manage.py shell -c "
+import base64
+from django.conf import settings
+from apps.agents.llm import LLMMessage
+from apps.agents.providers.gemini import GeminiProvider
+png_1x1 = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
+p = GeminiProvider.from_settings(settings.GEMINI_API_KEY, settings.GEMINI_MODEL)
+r = p.complete([LLMMessage(role='user', content='What color is this? One word.', image=png_1x1, image_mime_type='image/png')])
+print(r.content)
+"
+```
+**Sandbox quirk, not a code bug:** the first real call from this dev sandbox can take 1-2 minutes
+to resolve because `generativelanguage.googleapis.com` has IPv6 addresses and this environment
+silently drops outbound IPv6 (no fast failure) before the SDK falls back to IPv4. A plain `curl`
+to the same host over IPv4 responds instantly. If a real call ever seems to hang, it's this, not
+a broken key or a broken `GeminiProvider`.
 ```
 
 **Full stack (real runtime — needs Docker daemon running):**
@@ -183,10 +232,13 @@ Per [`CLAUDE.md`](CLAUDE.md), build the **Receipt Processor as a vertical slice*
       (HTTP-free business logic; thin viewset → serializer → service → model).
 - [x] **Step 3** — `LLMProvider` Protocol + a `FakeLLMProvider` (decided: fake-only first, no real API
       keys yet) + a `ReceiptExtraction` Pydantic schema (the validate-or-reject safety boundary).
-- [ ] **Step 4** — `AgentWorkflow` model with status state machine
+- [x] **Step 4** — `AgentWorkflow` model with status state machine
       (`pending → running → needs_review → approved/rejected`) + a Celery task (use `TenantBoundTask`)
       that runs the processor and lands in `needs_review`.
-- [ ] **Step 5** — receipt upload endpoint (thin) → serializer → `ExpenseService`.
+- [ ] **Step 5** — receipt upload endpoint (thin) → serializer → `ExpenseService`. This is also the
+      natural place for a confirm/reject endpoint (not explicitly named in the build order, but
+      step 6's frontend needs something to call, and step 7 wires `AuditLog` to it) — it would call
+      `AgentWorkflow.mark_approved()` + `ExpenseService.create()`, or `mark_rejected()`.
 - [ ] **Step 6** — frontend: upload zone → React Query mutation → poll workflow status → review/confirm
       UI (Zustand only for ephemeral UI state).
 - [ ] **Step 7** — `AuditLog` wired to the confirm action.
@@ -207,8 +259,9 @@ Then generalize to the other three agents (Invoice Chaser, Expense Approver, Mon
 ## Suggested first move in a new session
 
 1. `git branch --show-current` → confirm on `feat/tenant-foundation` (or merge to `main` first).
-2. Skim `backend/apps/tenancy/`, `backend/apps/expenses/`, and `backend/apps/agents/llm.py` to load
-   the isolation model, expense domain, and LLM boundary into context.
-3. Start step 4 (`AgentWorkflow` model + a `TenantBoundTask`-based Celery task that runs the Receipt
-   Processor and lands in `needs_review`) with the design/plan skills, following the same TDD +
+2. Skim `backend/apps/tenancy/`, `backend/apps/expenses/`, and `backend/apps/agents/` (`llm.py`,
+   `models.py`, `services.py`, `tasks.py`) to load the isolation model, expense domain, and the
+   agent/LLM boundary into context.
+3. Start step 5 (receipt upload endpoint + a confirm/reject endpoint, thin viewset → serializer →
+   `ExpenseService` / `AgentWorkflow`) with the design/plan skills, following the same TDD +
    small-commit rhythm.
