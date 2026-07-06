@@ -1,5 +1,6 @@
 from pathlib import Path
 import environ
+from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 env = environ.Env(DJANGO_DEBUG=(bool, False))
@@ -63,6 +64,12 @@ REST_FRAMEWORK = {
 
 CELERY_BROKER_URL = env("REDIS_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = env("REDIS_URL", default="redis://localhost:6379/0")
+CELERY_BEAT_SCHEDULE = {
+    "scan-overdue-invoices-daily": {
+        "task": "apps.agents.tasks.scan_overdue_invoices",
+        "schedule": crontab(hour=6, minute=0),
+    },
+}
 
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
 GEMINI_MODEL = env("GEMINI_MODEL", default="gemini-2.5-flash")
