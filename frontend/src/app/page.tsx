@@ -4,6 +4,8 @@ import { useAuth } from "@/lib/auth";
 import { LoginForm } from "@/components/login-form";
 import { UploadZone } from "@/components/upload-zone";
 import { WorkflowPanel } from "@/components/workflow-panel";
+import { InvoiceList } from "@/components/invoice-list";
+import { ReminderInbox } from "@/components/reminder-inbox";
 import { Button } from "@/components/ui/button";
 
 export default function Home() {
@@ -26,6 +28,8 @@ export default function Home() {
         <>
           <UploadZone />
           <WorkflowPanel />
+          <InvoiceList />
+          <ReminderInbox />
         </>
       )}
     </main>

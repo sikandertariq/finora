@@ -6,10 +6,11 @@ import type { WorkflowStatus } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ReviewForm } from "@/components/review-form";
+import { ReminderReview } from "@/components/reminder-review";
 
 const STATUS_LABEL: Record<WorkflowStatus, string> = {
   pending: "Waiting to be processed",
-  running: "Reading the receipt…",
+  running: "Working on it…",
   needs_review: "Ready for your review",
   approved: "Approved",
   rejected: "Rejected",
@@ -35,12 +36,15 @@ export function WorkflowPanel() {
     return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
 
+  const isInvoiceChaser = workflow.workflow_type === "invoice_chaser";
+  const title = isInvoiceChaser
+    ? `Invoice reminder #${workflow.invoice?.id ?? workflow.id}`
+    : `Receipt #${workflow.receipt?.id ?? workflow.id}`;
+
   return (
     <Card className="w-full max-w-md">
       <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle className="text-base">
-          Receipt #{workflow.receipt?.id ?? workflow.id}
-        </CardTitle>
+        <CardTitle className="text-base">{title}</CardTitle>
         <Badge variant={STATUS_VARIANT[workflow.status]}>
           {STATUS_LABEL[workflow.status]}
         </Badge>
@@ -51,15 +55,26 @@ export function WorkflowPanel() {
             This updates automatically — no need to refresh.
           </p>
         )}
-        {workflow.status === "needs_review" && (
-          <ReviewForm workflow={workflow} />
+        {workflow.status === "needs_review" &&
+          (isInvoiceChaser ? (
+            <ReminderReview workflow={workflow} />
+          ) : (
+            <ReviewForm workflow={workflow} />
+          ))}
+        {workflow.status === "approved" && isInvoiceChaser && (
+          <p className="text-sm text-muted-foreground">Reminder sent.</p>
         )}
-        {workflow.status === "approved" && (
+        {workflow.status === "approved" && !isInvoiceChaser && (
           <p className="text-sm text-muted-foreground">
             Saved as expense #{workflow.resulting_expense}.
           </p>
         )}
-        {workflow.status === "rejected" && (
+        {workflow.status === "rejected" && isInvoiceChaser && (
+          <p className="text-sm text-muted-foreground">
+            Dismissed — no reminder was sent.
+          </p>
+        )}
+        {workflow.status === "rejected" && !isInvoiceChaser && (
           <p className="text-sm text-muted-foreground">
             This receipt was rejected — no expense was created.
           </p>
