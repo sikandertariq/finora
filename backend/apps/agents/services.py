@@ -1,10 +1,12 @@
 import json
 import mimetypes
 
+from django.utils import timezone
 from pydantic import ValidationError
 
 from apps.expenses.schemas import ReceiptExtraction
 from apps.expenses.services import ExpenseService
+from apps.invoices.models import Invoice
 from apps.invoices.schemas import InvoiceReminderDraft
 
 from .llm import LLMMessage, LLMProvider
@@ -123,6 +125,53 @@ class InvoiceChaserService:
                 ),
             ),
         ]
+
+
+class InvoiceChaserScheduler:
+    """Finds overdue invoices that just crossed a new escalation threshold and starts
+    one AgentWorkflow per (invoice, threshold). Runs within the caller's tenant
+    context -- it does not set one itself. apps.agents.tasks.scan_overdue_invoices
+    (the Celery beat task) sets that context once per tenant and calls this."""
+
+    _EXCLUDED_STATUSES = [Invoice.Status.PAID, Invoice.Status.VOID, Invoice.Status.DRAFT]
+
+    @staticmethod
+    def scan_and_dispatch() -> list[AgentWorkflow]:
+        from .tasks import run_invoice_chaser  # local import, same reason as start_receipt_processing
+
+        today = timezone.localdate()
+        started = []
+        chaseable = Invoice.objects.exclude(
+            status__in=InvoiceChaserScheduler._EXCLUDED_STATUSES
+        ).filter(due_date__lt=today)
+
+        for invoice in chaseable:
+            days_overdue = (today - invoice.due_date).days
+            level = _reached_level(days_overdue)
+            if level is None:
+                continue
+            _, level_key, _tone = level
+            already_reminded = AgentWorkflow.objects.filter(
+                invoice=invoice, workflow_type="invoice_chaser",
+                extracted_data__escalation_level=level_key,
+            ).exists()
+            if already_reminded:
+                continue
+            workflow = AgentWorkflow.objects.create(
+                workflow_type="invoice_chaser", invoice=invoice,
+                extracted_data={"escalation_level": level_key},
+            )
+            run_invoice_chaser.delay(tenant_id=invoice.tenant_id, workflow_id=workflow.id)
+            started.append(workflow)
+        return started
+
+
+def _reached_level(days_overdue):
+    reached = None
+    for threshold_days, level_key, tone in _ESCALATION_LEVELS:
+        if days_overdue >= threshold_days:
+            reached = (threshold_days, level_key, tone)
+    return reached
 
 
 class AgentWorkflowService:
