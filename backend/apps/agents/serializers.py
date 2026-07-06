@@ -25,9 +25,11 @@ class AgentWorkflowSerializer(serializers.ModelSerializer):
 
 
 class ConfirmWorkflowSerializer(serializers.Serializer):
-    """Lets a human correct the AI's extraction before it becomes an Expense.
+    """Lets a human correct the AI's output before it's acted on.
 
-    Every field is optional — omit a field to accept what the agent extracted for it.
+    Every field is optional -- omit a field to accept what the agent produced for it.
+    vendor/amount/currency/category/expense_date apply to receipt_processor workflows;
+    subject/body apply to invoice_chaser ones. A given workflow only ever uses one set.
     """
 
     vendor = serializers.CharField(required=False)
@@ -35,6 +37,8 @@ class ConfirmWorkflowSerializer(serializers.Serializer):
     currency = serializers.CharField(required=False, max_length=3)
     category = serializers.CharField(required=False, allow_blank=True)
     expense_date = serializers.DateField(required=False)
+    subject = serializers.CharField(required=False)
+    body = serializers.CharField(required=False)
 
 
 class AuditLogSerializer(serializers.ModelSerializer):

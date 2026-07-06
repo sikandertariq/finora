@@ -192,6 +192,16 @@ class AgentWorkflowService:
 
     @staticmethod
     def approve(workflow: AgentWorkflow, *, reviewed_by, overrides: dict | None = None) -> AgentWorkflow:
+        if workflow.workflow_type == "invoice_chaser":
+            return AgentWorkflowService._approve_invoice_chaser(
+                workflow, reviewed_by=reviewed_by, overrides=overrides
+            )
+        return AgentWorkflowService._approve_receipt_processor(
+            workflow, reviewed_by=reviewed_by, overrides=overrides
+        )
+
+    @staticmethod
+    def _approve_receipt_processor(workflow: AgentWorkflow, *, reviewed_by, overrides) -> AgentWorkflow:
         data = workflow.extracted_data
         fields = {
             "vendor": data.get("vendor"),
@@ -212,6 +222,23 @@ class AgentWorkflowService:
             actor=reviewed_by,
             action="approved",
             metadata={"resulting_expense_id": expense.id, "overrides": overrides or {}},
+        )
+        return workflow
+
+    @staticmethod
+    def _approve_invoice_chaser(workflow: AgentWorkflow, *, reviewed_by, overrides) -> AgentWorkflow:
+        """Simulated send: writes what would have been emailed to AuditLog. No real
+        SMTP/SendGrid call -- see the design spec's explicit non-goal on this."""
+        data = workflow.extracted_data
+        overrides = overrides or {}
+        subject = overrides.get("subject") or data.get("subject")
+        body = overrides.get("body") or data.get("body")
+        workflow.mark_approved(reviewed_by=reviewed_by)
+        AuditLog.objects.create(
+            workflow=workflow,
+            actor=reviewed_by,
+            action="reminder_sent",
+            metadata={"subject": subject, "body": body, "to": workflow.invoice.client_email},
         )
         return workflow
 

@@ -5,6 +5,7 @@ from apps.agents import tasks
 from apps.agents.models import AgentWorkflow, AuditLog
 from apps.agents.services import AgentWorkflowService
 from apps.expenses.models import Receipt
+from apps.invoices.models import Invoice
 from apps.tenancy import context
 from tests.factories import TenantFactory, UserFactory
 
@@ -125,4 +126,74 @@ def test_reject_writes_an_audit_log_entry():
 
     log = AuditLog.objects.get(workflow=workflow)
     assert log.actor_id == user.id
+    assert log.action == "rejected"
+
+
+def _invoice_workflow(escalation_level="day_7"):
+    invoice = Invoice.objects.create(
+        client_name="Acme", client_email="ap@acme.test", amount="100.00",
+        issue_date="2026-06-01", due_date="2026-06-15", status=Invoice.Status.SENT,
+    )
+    workflow = AgentWorkflow.objects.create(
+        workflow_type="invoice_chaser", invoice=invoice,
+        extracted_data={"escalation_level": escalation_level},
+    )
+    workflow.mark_needs_review(
+        extracted_data={
+            "escalation_level": escalation_level,
+            "subject": "Invoice overdue",
+            "body": "Please pay by Friday.",
+        }
+    )
+    return workflow
+
+
+def test_approve_an_invoice_chaser_workflow_creates_no_expense():
+    user = UserFactory()
+    workflow = _invoice_workflow()
+
+    AgentWorkflowService.approve(workflow, reviewed_by=user)
+
+    workflow.refresh_from_db()
+    assert workflow.status == AgentWorkflow.Status.APPROVED
+    assert workflow.resulting_expense is None
+    assert workflow.reviewed_by_id == user.id
+
+
+def test_approve_an_invoice_chaser_workflow_writes_a_reminder_sent_audit_log():
+    user = UserFactory()
+    workflow = _invoice_workflow()
+
+    AgentWorkflowService.approve(workflow, reviewed_by=user)
+
+    log = AuditLog.objects.get(workflow=workflow)
+    assert log.actor_id == user.id
+    assert log.action == "reminder_sent"
+    assert log.metadata["subject"] == "Invoice overdue"
+    assert log.metadata["body"] == "Please pay by Friday."
+    assert log.metadata["to"] == "ap@acme.test"
+
+
+def test_approve_an_invoice_chaser_workflow_lets_a_human_edit_the_draft_first():
+    user = UserFactory()
+    workflow = _invoice_workflow()
+
+    AgentWorkflowService.approve(
+        workflow, reviewed_by=user, overrides={"subject": "URGENT: invoice overdue"}
+    )
+
+    log = AuditLog.objects.get(workflow=workflow)
+    assert log.metadata["subject"] == "URGENT: invoice overdue"
+    assert log.metadata["body"] == "Please pay by Friday."  # untouched override stays as drafted
+
+
+def test_reject_an_invoice_chaser_workflow_needs_no_special_handling():
+    user = UserFactory()
+    workflow = _invoice_workflow()
+
+    AgentWorkflowService.reject(workflow, reviewed_by=user)
+
+    workflow.refresh_from_db()
+    assert workflow.status == AgentWorkflow.Status.REJECTED
+    log = AuditLog.objects.get(workflow=workflow)
     assert log.action == "rejected"
