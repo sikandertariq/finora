@@ -84,3 +84,34 @@ def test_mark_rejected_records_who_rejected_it():
 
     assert workflow.status == AgentWorkflow.Status.REJECTED
     assert workflow.reviewed_by_id == user.id
+
+
+def test_workflow_can_be_created_for_an_invoice_instead_of_a_receipt():
+    from apps.invoices.models import Invoice
+
+    invoice = Invoice.objects.create(
+        client_name="Acme", client_email="ap@acme.test", amount="100.00",
+        issue_date="2026-06-01", due_date="2026-06-15",
+    )
+
+    workflow = AgentWorkflow.objects.create(workflow_type="invoice_chaser", invoice=invoice)
+
+    assert workflow.receipt_id is None
+    assert workflow.invoice_id == invoice.id
+
+
+def test_mark_approved_without_a_resulting_expense():
+    user = UserFactory()
+    from apps.invoices.models import Invoice
+
+    invoice = Invoice.objects.create(
+        client_name="Acme", client_email="ap@acme.test", amount="100.00",
+        issue_date="2026-06-01", due_date="2026-06-15",
+    )
+    workflow = AgentWorkflow.objects.create(workflow_type="invoice_chaser", invoice=invoice)
+
+    workflow.mark_approved(reviewed_by=user)
+
+    assert workflow.status == AgentWorkflow.Status.APPROVED
+    assert workflow.resulting_expense is None
+    assert workflow.reviewed_by_id == user.id

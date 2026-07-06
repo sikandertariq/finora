@@ -1,15 +1,18 @@
 from django.db import models
 
 from apps.expenses.models import Expense, Receipt
+from apps.invoices.models import Invoice
 from apps.tenancy.models import TenantScopedModel
 
 
 class AgentWorkflow(TenantScopedModel):
     """One run of an agent against one piece of input, reviewable and reversible.
 
-    ``workflow_type`` identifies which agent produced this row — only "receipt_processor"
-    exists so far; the other three agents will add their own values later rather than a
-    speculative enum defined up front.
+    ``workflow_type`` identifies which agent produced this row: "receipt_processor" or
+    "invoice_chaser" so far. Exactly one of ``receipt``/``invoice`` is set, depending on
+    which. Not a generic polymorphic link on purpose -- see
+    docs/superpowers/specs/2026-07-06-invoice-chaser-design.md for why this was punted
+    rather than guessed at with only one agent's needs as evidence.
     """
 
     class Status(models.TextChoices):
@@ -21,7 +24,12 @@ class AgentWorkflow(TenantScopedModel):
 
     workflow_type = models.CharField(max_length=50, default="receipt_processor")
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
-    receipt = models.ForeignKey(Receipt, on_delete=models.CASCADE, related_name="agent_workflows")
+    receipt = models.ForeignKey(
+        Receipt, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_workflows"
+    )
+    invoice = models.ForeignKey(
+        Invoice, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_workflows"
+    )
     extracted_data = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True, default="")
     resulting_expense = models.OneToOneField(
@@ -49,7 +57,7 @@ class AgentWorkflow(TenantScopedModel):
         self.status = self.Status.NEEDS_REVIEW
         self.save(update_fields=["extracted_data", "error_message", "status", "updated_at"])
 
-    def mark_approved(self, *, reviewed_by, resulting_expense):
+    def mark_approved(self, *, reviewed_by, resulting_expense=None):
         self.reviewed_by = reviewed_by
         self.resulting_expense = resulting_expense
         self.status = self.Status.APPROVED
