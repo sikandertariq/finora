@@ -1,6 +1,7 @@
 import type {
   AgentWorkflow,
   ConfirmWorkflowOverrides,
+  Invoice,
 } from "@/lib/types";
 
 const API_BASE_URL =
@@ -79,6 +80,24 @@ export function rejectWorkflow(id: number, token: string) {
   return request<AgentWorkflow>(
     `/agent-workflows/${id}/reject/`,
     { method: "POST", body: JSON.stringify({}) },
+    token
+  );
+}
+
+export function listInvoices(token: string) {
+  return request<Invoice[]>("/invoices/", {}, token);
+}
+
+export function listWorkflows(
+  params: { workflow_type?: string; status?: string },
+  token: string
+) {
+  const query = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v) as [string, string][]
+  ).toString();
+  return request<AgentWorkflow[]>(
+    `/agent-workflows/${query ? `?${query}` : ""}`,
+    {},
     token
   );
 }

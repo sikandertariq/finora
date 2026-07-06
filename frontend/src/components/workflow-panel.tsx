@@ -39,7 +39,7 @@ export function WorkflowPanel() {
     <Card className="w-full max-w-md">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base">
-          Receipt #{workflow.receipt.id}
+          Receipt #{workflow.receipt?.id ?? workflow.id}
         </CardTitle>
         <Badge variant={STATUS_VARIANT[workflow.status]}>
           {STATUS_LABEL[workflow.status]}
