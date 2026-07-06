@@ -19,7 +19,14 @@ class AgentWorkflowViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         # See ExpenseViewSet.get_queryset for why this isn't a `queryset =` class attribute.
-        return AgentWorkflow.objects.all()
+        qs = AgentWorkflow.objects.all()
+        workflow_type = self.request.query_params.get("workflow_type")
+        if workflow_type:
+            qs = qs.filter(workflow_type=workflow_type)
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            qs = qs.filter(status=status_param)
+        return qs
 
     @action(detail=True, methods=["post"])
     def confirm(self, request, pk=None):

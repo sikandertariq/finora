@@ -3,6 +3,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.agents.models import AgentWorkflow
 from apps.expenses.models import Receipt
+from apps.invoices.models import Invoice
 from apps.tenancy import context
 
 pytestmark = pytest.mark.django_db
@@ -82,3 +83,72 @@ def test_workflow_from_another_tenant_is_not_found(authed_client, other_authed_c
     resp = authed_client.get(f"/api/agent-workflows/{other_workflow.id}/")
 
     assert resp.status_code == 404
+
+
+def _needs_review_invoice_workflow(tenant):
+    context.set_current_tenant(tenant.id)
+    try:
+        invoice = Invoice.objects.create(
+            client_name="Acme", client_email="ap@acme.test", amount="100.00",
+            issue_date="2026-06-01", due_date="2026-06-15", status=Invoice.Status.SENT,
+        )
+        workflow = AgentWorkflow.objects.create(
+            workflow_type="invoice_chaser", invoice=invoice,
+            extracted_data={"escalation_level": "day_7"},
+        )
+        workflow.mark_needs_review(
+            extracted_data={
+                "escalation_level": "day_7", "subject": "Invoice overdue", "body": "Please pay.",
+            }
+        )
+        return workflow
+    finally:
+        context.clear_current_tenant()
+
+
+def test_workflow_detail_nests_the_invoice_when_present(authed_client):
+    workflow = _needs_review_invoice_workflow(authed_client.tenant)
+
+    resp = authed_client.get(f"/api/agent-workflows/{workflow.id}/")
+
+    assert resp.data["invoice"]["client_name"] == "Acme"
+    assert resp.data["receipt"] is None
+
+
+def test_workflow_detail_nests_null_invoice_for_a_receipt_workflow(authed_client):
+    workflow = _needs_review_workflow(authed_client.tenant)
+
+    resp = authed_client.get(f"/api/agent-workflows/{workflow.id}/")
+
+    assert resp.data["invoice"] is None
+
+
+def test_confirm_an_invoice_chaser_workflow_writes_a_reminder_sent_audit_log(authed_client):
+    workflow = _needs_review_invoice_workflow(authed_client.tenant)
+
+    resp = authed_client.post(f"/api/agent-workflows/{workflow.id}/confirm/", {}, format="json")
+
+    assert resp.status_code == 200, resp.data
+    assert resp.data["status"] == "approved"
+    assert resp.data["resulting_expense"] is None
+    logs = authed_client.get(f"/api/audit-logs/?workflow={workflow.id}").data
+    assert logs[0]["action"] == "reminder_sent"
+
+
+def test_filter_workflows_by_workflow_type(authed_client):
+    receipt_workflow = _needs_review_workflow(authed_client.tenant)
+    invoice_workflow = _needs_review_invoice_workflow(authed_client.tenant)
+
+    resp = authed_client.get("/api/agent-workflows/?workflow_type=invoice_chaser")
+
+    ids = [w["id"] for w in resp.data]
+    assert ids == [invoice_workflow.id]
+    assert receipt_workflow.id not in ids
+
+
+def test_filter_workflows_by_status(authed_client):
+    needs_review = _needs_review_workflow(authed_client.tenant)
+
+    resp = authed_client.get("/api/agent-workflows/?status=needs_review")
+
+    assert [w["id"] for w in resp.data] == [needs_review.id]
