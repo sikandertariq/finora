@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from apps.expenses.schemas import ReceiptExtraction
 from apps.expenses.services import ExpenseService
+from apps.invoices.schemas import InvoiceReminderDraft
 
 from .llm import LLMMessage, LLMProvider
 from .models import AgentWorkflow, AuditLog
@@ -18,6 +19,28 @@ _SYSTEM_PROMPT = (
     "If you cannot confidently read a field, add its name to missing_fields instead of "
     "guessing."
 )
+
+_INVOICE_CHASER_SYSTEM_PROMPT = (
+    "You are an accounts-receivable assistant drafting a reminder email about an "
+    "overdue invoice. Respond with ONLY a JSON object (no markdown, no commentary) "
+    'matching this shape: {"subject": str, "body": str}. Match the requested tone.'
+)
+
+# (threshold_days, level_key, tone) -- shared with InvoiceChaserScheduler (Task 7).
+# Deliberately a flat constant, not a per-tenant rules model (see design spec).
+_ESCALATION_LEVELS = [
+    (1, "day_1", "a polite reminder"),
+    (7, "day_7", "a polite reminder"),
+    (14, "day_14", "a firmer follow-up"),
+    (30, "day_30", "a final notice"),
+]
+
+
+def _tone_for_level(level_key):
+    for _, key, tone in _ESCALATION_LEVELS:
+        if key == level_key:
+            return tone
+    return "a reminder"
 
 
 class ReceiptProcessorService:
@@ -55,6 +78,49 @@ class ReceiptProcessorService:
                 content="Extract this receipt's data as instructed.",
                 image=image_bytes,
                 image_mime_type=mime_type,
+            ),
+        ]
+
+
+class InvoiceChaserService:
+    """Runs the Invoice Chaser agent against one AgentWorkflow's invoice.
+
+    Same shape as ReceiptProcessorService: inject an LLMProvider, call it, validate
+    the result through a Pydantic schema before it touches the workflow row.
+    """
+
+    def __init__(self, llm_provider: LLMProvider):
+        self._llm = llm_provider
+
+    def run(self, workflow: AgentWorkflow) -> AgentWorkflow:
+        workflow.mark_running()
+        invoice = workflow.invoice
+        tone = _tone_for_level(workflow.extracted_data.get("escalation_level"))
+        try:
+            response = self._llm.complete(self._build_messages(invoice, tone))
+            draft = InvoiceReminderDraft(**json.loads(_strip_code_fence(response.content)))
+        except (json.JSONDecodeError, ValidationError) as exc:
+            workflow.mark_needs_review(
+                extracted_data=workflow.extracted_data,
+                error_message=f"Could not draft a reminder for this invoice: {exc}",
+            )
+            return workflow
+        workflow.mark_needs_review(
+            extracted_data={**workflow.extracted_data, **draft.model_dump(mode="json")}
+        )
+        return workflow
+
+    @staticmethod
+    def _build_messages(invoice, tone) -> list[LLMMessage]:
+        return [
+            LLMMessage(role="system", content=_INVOICE_CHASER_SYSTEM_PROMPT),
+            LLMMessage(
+                role="user",
+                content=(
+                    f"Draft {tone} to {invoice.client_name} <{invoice.client_email}> "
+                    f"about their invoice for {invoice.amount} {invoice.currency}, "
+                    f"which was due on {invoice.due_date}."
+                ),
             ),
         ]
 
