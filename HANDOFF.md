@@ -34,10 +34,41 @@
   is actually reviewable, not write-only. Manually verified over real HTTP against the running
   dev stack, not just `pytest`.
 - **All work is on branch `feat/tenant-foundation`**, **not merged to `main`**, **no git remote** configured.
-- **Backend tests: 82/82 passing.** Frontend builds and lints clean.
-- **Next up:** the whole build order (steps 1–7) is done. Per CLAUDE.md, generalize the vertical
-  slice to the other three agents (Invoice Chaser, Expense Approver, Monthly Close) + the
-  AI Co-Pilot — none of that exists yet.
+- **Invoice Chaser (the second agent) is DONE** — a full vertical slice built via 15 TDD tasks
+  (spec: [`docs/superpowers/specs/2026-07-06-invoice-chaser-design.md`](docs/superpowers/specs/2026-07-06-invoice-chaser-design.md),
+  plan: [`docs/superpowers/plans/2026-07-06-invoice-chaser.md`](docs/superpowers/plans/2026-07-06-invoice-chaser.md)).
+  New `apps/invoices` app (`Invoice` model + `InvoiceService`, full CRUD at `/api/invoices/`);
+  `AgentWorkflow` generalized with the minimum change needed — `receipt` is now nullable, a new
+  nullable `invoice` FK was added, `mark_approved()`'s `resulting_expense` is now optional — rather
+  than a speculative polymorphic redesign (deliberately punted, per the design spec). A daily
+  Celery **beat** task (`scan_overdue_invoices`, new — the first beat-scheduled task in this
+  codebase) loops tenants and starts a new `AgentWorkflow` per invoice that just crossed an
+  escalation threshold (1/7/14/30 days overdue), deduped via a query on `AgentWorkflow.extracted_data`
+  (a JSONField key lookup, not a new column). `InvoiceChaserService` drafts a reminder via the same
+  `LLMProvider`/Gemini boundary as the Receipt Processor, validated through a new
+  `InvoiceReminderDraft` Pydantic schema. `AgentWorkflowService.approve()`/`.reject()` are
+  generalized to branch on `workflow_type`; approving a reminder is a **simulated send** — it
+  writes an `AuditLog` row (`action="reminder_sent"`), no real email goes out (explicit non-goal).
+  Frontend adds an invoice table, a reminder inbox, and a review/send form, reusing the existing
+  polling and Zustand `activeWorkflowId` patterns (`workflow-panel.tsx` now branches on
+  `workflow_type` to show `ReviewForm` or the new `ReminderReview`).
+  **Manually verified against the real running stack** (real Redis, real Celery worker + a real
+  Celery beat task run manually, real Gemini call, real browser): created a real overdue invoice
+  via the API, ran `scan_overdue_invoices`, watched it draft a correct, well-formed reminder email
+  via Gemini, reviewed and sent it from the actual browser UI, and confirmed the `reminder_sent`
+  `AuditLog` row via `GET /api/audit-logs/`. One real (environment, not code) hiccup during
+  verification: a task dispatched from inside a `manage.py shell` process that exits immediately
+  after didn't show up in the worker log even though the workflow row it created was correct;
+  redispatching the same task explicitly (`.delay()` from a second shell call) worked immediately
+  and completed in seconds — noted here as a manual-testing quirk of this sandbox, not reproduced
+  via the automated `.delay()`-based regression tests, which all pass.
+- **Backend tests: 131/131 passing** (up from 82 before this feature). Frontend builds and lints
+  clean (`npm run build` succeeds with the generalized types/components).
+- **Next up:** two agents down (Receipt Processor, Invoice Chaser), two to go — Expense Approver
+  and Monthly Close — plus the AI Co-Pilot. `AgentWorkflow`'s `receipt`/`invoice` nullable-FK
+  pattern held up fine for a second agent; whether a third agent's needs finally justify
+  generalizing it further (e.g. a generic content-type link) is a decision for whenever that agent
+  is scoped, not before.
 
 ## What exists right now
 
@@ -413,9 +444,10 @@ Per [`CLAUDE.md`](CLAUDE.md), build the **Receipt Processor as a vertical slice*
       minimal read-only `GET /api/audit-logs/` (see the writeup above for why the read endpoint
       was added despite not being named explicitly).
 
-**The build order (steps 1–7) is complete.** Next: generalize to the other three agents (Invoice
-Chaser, Expense Approver, Monthly Close) + the AI Co-Pilot. None of that exists yet — this vertical
-slice (Receipt Processor only) is the whole product so far.
+**The build order (steps 1–7) is complete, and the second agent (Invoice Chaser) is also done** —
+see the TL;DR above and `docs/superpowers/specs/2026-07-06-invoice-chaser-design.md` /
+`docs/superpowers/plans/2026-07-06-invoice-chaser.md` for the full detail. Next: **Expense Approver**
+and **Monthly Close** + the AI Co-Pilot. None of those exist yet.
 
 ## Conventions to keep following
 
@@ -441,6 +473,15 @@ slice (Receipt Processor only) is the whole product so far.
   afterthought. When the next agent's approve/reject-equivalent action gets built, it gets this too.
 - **Do a review** and ask a "why this over that?" design question after any non-trivial code (per the
   practice format in the user's global setup).
+- **A schedule-triggered agent (not request-triggered) needs its own Celery task that is NOT a
+  `TenantBoundTask`** — see `scan_overdue_invoices` (Invoice Chaser). It owns looping every tenant
+  itself, setting/clearing context per tenant in a `try`/`finally`, then calling a plain
+  (non-Celery) scheduler method that assumes context is already set. Monthly Close will likely need
+  the same shape.
+- **"Has this already happened before?" dedup logic can reuse `AgentWorkflow.extracted_data`
+  (a JSONField key lookup) instead of a new column** — see Invoice Chaser's `escalation_level`
+  dedup. Cheap to add, no migration, works identically on SQLite (tests) and Postgres (real
+  runtime) since Django JSONField key lookups are backend-agnostic since 3.1.
 
 ## Suggested first move in a new session
 
