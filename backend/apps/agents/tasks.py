@@ -5,7 +5,7 @@ from config.celery import app
 
 from .models import AgentWorkflow
 from .providers.gemini import GeminiProvider
-from .services import ReceiptProcessorService
+from .services import InvoiceChaserService, ReceiptProcessorService
 
 
 @app.task(base=TenantBoundTask, bind=False)
@@ -18,3 +18,11 @@ def run_receipt_processor(workflow_id):
     workflow = AgentWorkflow.objects.get(id=workflow_id)
     provider = GeminiProvider.from_settings(settings.GEMINI_API_KEY, settings.GEMINI_MODEL)
     ReceiptProcessorService(provider).run(workflow)
+
+
+@app.task(base=TenantBoundTask, bind=False)
+def run_invoice_chaser(workflow_id):
+    """Thin Celery entrypoint, same shape as run_receipt_processor."""
+    workflow = AgentWorkflow.objects.get(id=workflow_id)
+    provider = GeminiProvider.from_settings(settings.GEMINI_API_KEY, settings.GEMINI_MODEL)
+    InvoiceChaserService(provider).run(workflow)
