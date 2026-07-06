@@ -42,6 +42,12 @@ def _tone_for_level(level_key):
     for _, key, tone in _ESCALATION_LEVELS:
         if key == level_key:
             return tone
+    # Defensive fallback only -- this should never be reached in normal operation.
+    # InvoiceChaserScheduler always sets a valid escalation_level on extracted_data
+    # before InvoiceChaserService.run() ever reads it. If we land here, extracted_data
+    # was corrupted or tampered with; we still produce a usable (if generically-toned)
+    # email rather than crashing the Celery task, but this is not a real state a user
+    # should expect to hit.
     return "a reminder"
 
 

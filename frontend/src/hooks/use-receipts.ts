@@ -48,6 +48,7 @@ export function useConfirmWorkflow(id: number) {
       api.confirmWorkflow(id, overrides, token as string),
     onSuccess: (workflow) => {
       queryClient.setQueryData(["agent-workflow", id], workflow);
+      queryClient.invalidateQueries({ queryKey: ["agent-workflows"] });
     },
   });
 }
@@ -60,6 +61,7 @@ export function useRejectWorkflow(id: number) {
     mutationFn: () => api.rejectWorkflow(id, token as string),
     onSuccess: (workflow) => {
       queryClient.setQueryData(["agent-workflow", id], workflow);
+      queryClient.invalidateQueries({ queryKey: ["agent-workflows"] });
     },
   });
 }
