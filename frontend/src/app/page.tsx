@@ -7,6 +7,7 @@ import { WorkflowPanel } from "@/components/workflow-panel";
 import { InvoiceList } from "@/components/invoice-list";
 import { ReminderInbox } from "@/components/reminder-inbox";
 import { Button } from "@/components/ui/button";
+import { BackendStatus } from "@/components/backend-status";
 
 export default function Home() {
   const { token, signOut } = useAuth();
@@ -21,6 +22,8 @@ export default function Home() {
           </Button>
         )}
       </div>
+
+      <BackendStatus />
 
       {!token ? (
         <LoginForm />

@@ -23,17 +23,24 @@ export function LoginForm() {
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ resolver: zodResolver(schema) });
 
   async function onSubmit(values: FormValues) {
     setError(null);
     try {
-      const { access } = await login(values.username, values.password);
-      signIn(access);
+      const session = await login(values.username, values.password);
+      signIn(session);
     } catch {
       setError("Couldn't sign in — check your username and password.");
     }
+  }
+
+  function tryDemo() {
+    setValue("username", process.env.NEXT_PUBLIC_DEMO_USERNAME ?? "demo");
+    setValue("password", process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "demo-password");
+    void handleSubmit(onSubmit)();
   }
 
   return (
@@ -64,6 +71,19 @@ export function LoginForm() {
       <Button type="submit" disabled={isSubmitting}>
         {isSubmitting ? "Signing in…" : "Sign in"}
       </Button>
+      <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+        <p className="font-medium">Public portfolio demo</p>
+        <p className="mt-1">This data resets regularly. Do not upload real or sensitive receipts.</p>
+        <Button
+          className="mt-3"
+          type="button"
+          variant="outline"
+          onClick={tryDemo}
+          disabled={isSubmitting}
+        >
+          Try the demo
+        </Button>
+      </div>
     </form>
   );
 }
