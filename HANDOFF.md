@@ -1,7 +1,7 @@
 # Finora — Handoff / Continue Here
 
 > Living status doc. If you're a fresh session: read [`CLAUDE.md`](CLAUDE.md) (the locked
-> spec) first, then this file for *where we actually are*. Last updated: **2026-07-06**.
+> spec) first, then this file for *where we actually are*. Last updated: **2026-07-21**.
 
 ## TL;DR
 
@@ -34,6 +34,13 @@
   is actually reviewable, not write-only. Manually verified over real HTTP against the running
   dev stack, not just `pytest`.
 - **All work is on branch `feat/tenant-foundation`**, **not merged to `main`**, **no git remote** configured.
+- **Portfolio deployment implementation is complete but not provisioned yet:** production Django
+  security settings, `/api/health/`, upload limits, a disposable public demo tenant, persistent
+  browser token refresh, Vercel proxy support, production Docker Compose/Nginx/IP-certificate
+  scripts, CloudFormation, and GitHub workflows are all in this branch. The remaining external
+  handoff is creating the public GitHub remote, deploying `infra/aws/finora.yaml`, adding SSM
+  parameters and GitHub/Vercel variables, then letting the workflows provision the live demo.
+  See [`docs/deployment/aws-portfolio.md`](docs/deployment/aws-portfolio.md).
 - **Invoice Chaser (the second agent) is DONE** — a full vertical slice built via 15 TDD tasks
   (spec: [`docs/superpowers/specs/2026-07-06-invoice-chaser-design.md`](docs/superpowers/specs/2026-07-06-invoice-chaser-design.md),
   plan: [`docs/superpowers/plans/2026-07-06-invoice-chaser.md`](docs/superpowers/plans/2026-07-06-invoice-chaser.md)).

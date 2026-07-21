@@ -29,6 +29,10 @@ envsubst < "$APP_DIR/deploy/production/runtime.env.template" > "$APP_DIR/.env.pr
 chmod 600 "$APP_DIR/.env.production"
 
 cd "$APP_DIR"
+if [[ ! -f "/etc/letsencrypt/live/$BACKEND_PUBLIC_IP/fullchain.pem" ]]; then
+  "$APP_DIR/deploy/production/configure-nginx.sh" \
+    "$BACKEND_PUBLIC_IP" "$(< /etc/finora/certbot-email)"
+fi
 if docker compose --env-file .env.production -f docker-compose.production.yml ps postgres --status running -q | grep -q .; then
   docker compose --env-file .env.production -f docker-compose.production.yml exec -T postgres \
     pg_dump -U finora finora > "data/backups/pre-deploy-$(date -u +%Y%m%dT%H%M%SZ).sql"
@@ -37,7 +41,7 @@ docker compose --env-file .env.production -f docker-compose.production.yml pull
 docker compose --env-file .env.production -f docker-compose.production.yml up -d --remove-orphans
 
 for _ in $(seq 1 24); do
-  if curl --fail --silent http://127.0.0.1:8000/api/health/ >/dev/null; then
+  if curl --fail --silent "https://$BACKEND_PUBLIC_IP/api/health/" >/dev/null; then
     exit 0
   fi
   sleep 5

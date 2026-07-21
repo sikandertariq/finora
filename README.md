@@ -5,6 +5,7 @@ agent action is reviewable, reversible, and logged.
 
 - Engineering guardrails: [`CLAUDE.md`](CLAUDE.md)
 - Designs & plans: [`docs/superpowers/`](docs/superpowers/)
+- Public deployment: [`docs/deployment/aws-portfolio.md`](docs/deployment/aws-portfolio.md)
 
 ## Status
 
@@ -25,6 +26,7 @@ none of that exists yet.
 backend/   Django 5 + DRF (ViewSet -> Serializer -> Service -> Model)
 frontend/  Next.js 15 (App Router) + TypeScript
 docker-compose.yml   django, celery-worker, celery-beat, postgres, redis
+docker-compose.production.yml   one-host AWS production stack
 ```
 
 ## Run with Docker (real runtime)
@@ -60,6 +62,15 @@ python -m venv .venv && . .venv/bin/activate
 pip install -e . && pip install pytest pytest-django factory-boy
 python -m pytest -q
 ```
+
+## Portfolio deployment
+
+The public portfolio setup uses Vercel for `frontend/` and one manually
+startable AWS EC2 host for Django, Celery, PostgreSQL, and Redis. It has no
+RDS, NAT gateway, load balancer, paid domain, or inbound SSH. Follow the
+[AWS portfolio deployment guide](docs/deployment/aws-portfolio.md) before
+making the repository public; it covers secret storage, CloudFormation, Vercel,
+manual start/stop, and the January 2027 cleanup deadline.
 
 ## Auth smoke test
 

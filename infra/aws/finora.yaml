@@ -156,6 +156,9 @@ Resources:
             echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
           fi
           mkdir -p /srv/finora/data/{postgres,redis,media,celery-beat,backups}
+          mkdir -p /etc/finora
+          printf '%s\n' '${NotificationEmail}' > /etc/finora/certbot-email
+          chmod 600 /etc/finora/certbot-email
           chown -R ubuntu:ubuntu /srv/finora
           usermod -aG docker ubuntu
           printf '0 */6 * * * root /srv/finora/deploy/production/renew-certificates.sh\n' > /etc/cron.d/finora-certbot
