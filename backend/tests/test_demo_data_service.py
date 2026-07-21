@@ -2,9 +2,11 @@ from datetime import date, timedelta
 
 import pytest
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.files.storage import default_storage
 from django.core.management import call_command
 
-from apps.expenses.models import Expense
+from apps.expenses.models import Expense, Receipt
 from apps.invoices.models import Invoice
 from apps.invoices.services import InvoiceService
 from apps.tenancy import context
@@ -83,3 +85,22 @@ def test_reset_demo_management_command_uses_configured_public_password(settings)
 
     demo_user = User.objects.get(username="demo")
     assert demo_user.check_password("configured-demo-password")
+
+
+def test_demo_reset_removes_files_uploaded_to_the_disposable_tenant():
+    demo_tenant = DemoDataService.reset(password="demo-password")
+    demo_user = User.objects.get(username="demo")
+    context.set_current_tenant(demo_tenant.id)
+    try:
+        receipt = Receipt.objects.create(
+            uploaded_by=demo_user,
+            file=SimpleUploadedFile("demo-receipt.jpg", b"demo file", content_type="image/jpeg"),
+        )
+        file_name = receipt.file.name
+        assert default_storage.exists(file_name)
+    finally:
+        context.clear_current_tenant()
+
+    DemoDataService.reset(password="demo-password")
+
+    assert not default_storage.exists(file_name)

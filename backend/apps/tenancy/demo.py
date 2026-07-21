@@ -3,10 +3,12 @@
 from datetime import timedelta
 
 from django.contrib.auth.models import User
+from django.core.files.storage import default_storage
 from django.db import transaction
 from django.utils import timezone
 
 from apps.agents.models import AgentWorkflow
+from apps.expenses.models import Receipt
 from apps.expenses.services import ExpenseService
 from apps.invoices.models import Invoice
 from apps.invoices.services import InvoiceService
@@ -37,7 +39,13 @@ class DemoDataService:
         if existing_membership and existing_membership.tenant.slug != cls.TENANT_SLUG:
             raise RuntimeError("The reserved demo user belongs to a non-demo tenant.")
 
+        old_receipt_files = list(
+            Receipt.all_tenants.filter(tenant__slug=cls.TENANT_SLUG).values_list("file", flat=True)
+        )
         Tenant.objects.filter(slug=cls.TENANT_SLUG).delete()
+        for file_name in old_receipt_files:
+            if file_name:
+                default_storage.delete(file_name)
         tenant = Tenant.objects.create(name="Finora Public Demo", slug=cls.TENANT_SLUG)
         demo_user.set_password(password)
         demo_user.save(update_fields=["password"])
