@@ -73,10 +73,15 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.agents.tasks.scan_overdue_invoices",
         "schedule": crontab(hour=6, minute=0),
     },
+    "reset-public-demo-daily": {
+        "task": "apps.agents.tasks.recover_demo",
+        "schedule": crontab(hour=4, minute=0),
+    },
 }
 
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
 GEMINI_MODEL = env("GEMINI_MODEL", default="gemini-2.5-flash")
+DEMO_USER_PASSWORD = env("DEMO_USER_PASSWORD", default="demo-password")
 
 # The Next.js dev server runs on a different origin (port), so the browser needs
 # an explicit CORS allowlist to let it call this API at all.

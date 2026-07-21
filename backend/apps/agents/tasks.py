@@ -1,6 +1,7 @@
 from django.conf import settings
 
 from apps.tenancy import context
+from apps.tenancy.demo import DemoDataService
 from apps.tenancy.models import Tenant
 from apps.tenancy.tasks import TenantBoundTask
 from config.celery import app
@@ -42,3 +43,10 @@ def scan_overdue_invoices():
             InvoiceChaserScheduler.scan_and_dispatch()
         finally:
             context.clear_current_tenant()
+
+
+@app.task(bind=False)
+def recover_demo():
+    """Recreate public sample data after an instance restart and once per day."""
+    DemoDataService.reset(password=settings.DEMO_USER_PASSWORD)
+    scan_overdue_invoices.delay()
