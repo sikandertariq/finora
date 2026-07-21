@@ -61,6 +61,9 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    "DEFAULT_THROTTLE_RATES": {
+        "receipt_upload": env("RECEIPT_UPLOAD_THROTTLE", default="10/hour"),
+    },
 }
 
 CELERY_BROKER_URL = env("REDIS_URL", default="redis://localhost:6379/0")
@@ -83,5 +86,12 @@ CORS_ALLOWED_ORIGINS = env.list(
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+MAX_RECEIPT_UPLOAD_BYTES = env.int("MAX_RECEIPT_UPLOAD_BYTES", default=5 * 1024 * 1024)
+ALLOWED_RECEIPT_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+}
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

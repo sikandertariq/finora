@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import serializers
 
 from .models import Expense, Receipt
@@ -13,6 +14,13 @@ class ReceiptSerializer(serializers.ModelSerializer):
 
 class ReceiptUploadSerializer(serializers.Serializer):
     file = serializers.FileField()
+
+    def validate_file(self, value):
+        if value.size > settings.MAX_RECEIPT_UPLOAD_BYTES:
+            raise serializers.ValidationError("Receipt files must be 5 MB or smaller.")
+        if value.content_type not in settings.ALLOWED_RECEIPT_MIME_TYPES:
+            raise serializers.ValidationError("Upload a JPEG, PNG, WEBP, or PDF receipt.")
+        return value
 
 
 class ExpenseSerializer(serializers.ModelSerializer):

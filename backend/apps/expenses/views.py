@@ -1,6 +1,7 @@
 from rest_framework import generics, status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 
 from apps.agents.serializers import AgentWorkflowSerializer
 from apps.agents.services import AgentWorkflowService
@@ -25,6 +26,8 @@ class ReceiptUploadView(generics.GenericAPIView):
 
     serializer_class = ReceiptUploadSerializer
     permission_classes = [IsAuthenticated, IsTenantMember]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "receipt_upload"
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
