@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -e . --group dev
+      - run: python -m pytest -q
+      - run: python manage.py check
+      - run: >-
+          DJANGO_SETTINGS_MODULE=config.settings.production
+          DJANGO_SECRET_KEY=ci-production-secret-key-with-more-than-thirty-two-characters
+          DJANGO_ALLOWED_HOSTS=example.test
+          DATABASE_URL=sqlite:///:memory:
+          python manage.py check --deploy
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  deployment-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate production Compose syntax
+        run: >-
+          FINORA_ENV_FILE=./deploy/.env.production.example
+          FINORA_BACKEND_IMAGE=example.invalid/finora:ci
+          POSTGRES_USER=finora POSTGRES_PASSWORD=testpassword POSTGRES_DB=finora
+          docker compose -f docker-compose.production.yml config --quiet
+      - name: Reject tracked API-style secrets
+        run: |
+          if git grep -nE 'AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}'; then
+            echo 'Potential secret found in tracked files.' >&2
+            exit 1
+          fi

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-  echo "Usage: $0 BACKEND_PUBLIC_HOST CERTBOT_EMAIL" >&2
+  echo "Usage: $0 ELASTIC_IP CERTBOT_EMAIL" >&2
   exit 64
 fi
 
@@ -22,8 +22,9 @@ sudo systemctl reload nginx
 
 sudo certbot certonly --webroot --non-interactive --agree-tos \
   --email "$CERTBOT_EMAIL" \
+  --preferred-profile shortlived \
   --webroot-path /var/www/certbot \
-  -d "$BACKEND_PUBLIC_HOST"
+  --ip-address "$BACKEND_PUBLIC_HOST"
 
 envsubst '${BACKEND_PUBLIC_HOST}' \
   < "$SCRIPT_DIR/finora-https.nginx.conf.template" \

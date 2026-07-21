@@ -1,0 +1,37 @@
+name: Demo power control
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        description: EC2 action
+        required: true
+        default: status
+        options: [start, stop, restart, status]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  power:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - env:
+          ACTION: ${{ inputs.action }}
+          INSTANCE_ID: ${{ vars.AWS_INSTANCE_ID }}
+        run: |
+          case "$ACTION" in
+            start) aws ec2 start-instances --instance-ids "$INSTANCE_ID" ;;
+            stop) aws ec2 stop-instances --instance-ids "$INSTANCE_ID" ;;
+            restart) aws ec2 reboot-instances --instance-ids "$INSTANCE_ID" ;;
+            status) ;;
+          esac
+          aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].{State:State.Name,PublicIp:PublicIpAddress}' \
+            --output table
