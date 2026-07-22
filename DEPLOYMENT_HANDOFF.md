@@ -1,6 +1,6 @@
 # Finora Deployment Handoff
 
-> Continue here for deployment work. Last verified: **2026-07-22, 15:30 PKT**.
+> Continue here for deployment work. Last verified: **2026-07-22, 18:00 PKT**.
 > Read `AGENTS.md` first for architecture/engineering rules, then this file.
 
 ## Current goal
@@ -55,7 +55,14 @@ At the time this file was written:
   polling window expired while the invocation still reported `InProgress` with
   empty stdout/stderr. This was a workflow timeout, not a demonstrated
   application failure. The public-health verification step was skipped.
-- Fresh checks after the workflow ended returned HTTP `200` for all three
+- The failed run was triggered by a frontend-only commit because the backend
+  workflow had no path filters. Its remote command also retained SSM's one-hour
+  default execution timeout while GitHub stopped polling after six minutes, and
+  the workflow did not print the command ID needed for later inspection.
+- The prepared workflow fix restricts automatic runs to backend/deployment/IaC
+  inputs, serializes production deployments, sets a 60-second delivery timeout
+  and 600-second execution timeout, and prints command lifecycle diagnostics.
+- Fresh checks at 18:00 PKT returned HTTP `200` for all three
   public paths. Both health endpoints returned `{"status": "ok"}`:
   `https://52.73.119.50/api/health/`,
   `https://finora-tbll.vercel.app/api/health`, and the Vercel frontend root.
@@ -84,9 +91,7 @@ Then perform a browser smoke test: load the Vercel site, use the public demo
 login already configured in Vercel, confirm invoices/workflows load, and test
 one harmless receipt upload/review cycle.
 
-Before dispatching another backend deploy, inspect whether the SSM command from
-run `29911508445` has reached a terminal state in AWS Systems Manager Run
-Command. The GitHub log captured only this final result:
+The GitHub log for run `29911508445` captured only this final result:
 
 ```json
 {
@@ -103,10 +108,9 @@ gh run view 29911508445 --repo sikandertariq/finora \
   --job 88895290521 --log-failed
 ```
 
-Do not redeploy merely to clear the red GitHub badge: the application is
-currently healthy. Diagnose why the remote command remained `InProgress` after
-the services recovered, then either increase/fix the workflow's polling logic
-or remove the command-side hang before the next real backend change.
+The application remained healthy. The workflow fix is intended to prevent the
+unrelated trigger and ensure that any future remote hang reaches a bounded,
+observable terminal path instead of outliving the GitHub polling step.
 
 ## Deployment failures already diagnosed and fixed
 
@@ -153,6 +157,11 @@ unless the same error text returns.
    rewrites Vercel's slashless API route to Django with a trailing slash.
    Commits: `1cc3f60`, `128cae5`.
 
+9. **Frontend-only pushes redeployed the backend, and SSM could outlive CI.**
+   The backend workflow now filters production inputs, serializes deployments,
+   configures explicit SSM delivery/execution deadlines, prints the SSM command
+   ID and status transitions, and requests cancellation at its final deadline.
+
 ## Important files
 
 | File | Purpose |
@@ -192,11 +201,13 @@ unless the same error text returns.
   `finora` and `finora-tbll`.
 - Fresh post-run checks at 15:30 PKT returned `{"status": "ok"}` from both the
   direct backend and Vercel proxy; the Vercel frontend returned HTTP `200`.
+- The deployment artifact regression test was observed failing before the
+  workflow change and passing afterward: 4 tests passed.
 
 ## Git/worktree state
 
-- Local branch name: `feat/tenant-foundation`.
-- Deployments are pushed to remote `main` with `git push origin HEAD:main`.
+- Local branch name: `main`.
+- Deployments are pushed to remote `main` with `git push origin main`.
 - Latest pushed commit when this handoff was written: `128cae5`.
 - `AGENTS.md` is an intentional untracked workspace instruction file. Do not
   stage, commit, delete, or overwrite it.
@@ -205,11 +216,9 @@ unless the same error text returns.
 
 ## Recommended follow-up after deployment is green
 
-1. Add path filters so frontend-only commits do not trigger the backend deploy
-   workflow. Include backend/deployment/IaC files and the workflow itself; keep
-   `workflow_dispatch` for manual restarts.
+1. Push the bounded deployment workflow on `main`, monitor its exact Actions
+   run, and record the final run URL/result here.
 2. Run the browser smoke test described above.
-3. Update this handoff and `HANDOFF.md` to record the final green URL/result.
-4. Stop EC2 through `Demo power control` when the demo is not needed. Starting
+3. Stop EC2 through `Demo power control` when the demo is not needed. Starting
    later should be: start workflow, wait for all EC2 checks, then run backend
    deploy to renew the short IP certificate and reset disposable demo data.

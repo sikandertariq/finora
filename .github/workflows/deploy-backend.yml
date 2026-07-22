@@ -3,7 +3,17 @@ name: Deploy backend
 on:
   push:
     branches: [main]
+    paths:
+      - .github/workflows/deploy-backend.yml
+      - backend/**
+      - deploy/**
+      - docker-compose.production.yml
+      - infra/aws/**
   workflow_dispatch:
+
+concurrency:
+  group: finora-production-backend
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -13,6 +23,7 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -43,34 +54,53 @@ jobs:
         env:
           IMAGE_REF: ghcr.io/${{ github.repository_owner }}/finora-backend:${{ steps.image-meta.outputs.version }}
         run: |
+          REMOTE_COMMAND=$(printf '%s\n' \
+            'set -eu' \
+            'export HOME=/root' \
+            "if [ ! -d /srv/finora/.git ]; then git clone https://github.com/${{ github.repository }}.git /srv/finora; fi" \
+            'git config --global --add safe.directory /srv/finora' \
+            'cd /srv/finora' \
+            'git fetch origin main' \
+            'git switch main' \
+            'git pull --ff-only origin main' \
+            "./deploy/production/deploy-remote.sh '$IMAGE_REF' '${{ vars.BACKEND_PUBLIC_IP }}'")
+          PARAMETERS=$(jq -nc --arg command "$REMOTE_COMMAND" \
+            '{commands: [$command], executionTimeout: ["600"]}')
           COMMAND_ID=$(aws ssm send-command \
             --document-name AWS-RunShellScript \
             --instance-ids "${{ vars.AWS_INSTANCE_ID }}" \
-            --parameters commands="export HOME=/root; cd /srv/finora || git clone https://github.com/${{ github.repository }}.git /srv/finora; git config --global --add safe.directory /srv/finora; cd /srv/finora; git fetch origin main; git switch main; git pull --ff-only origin main; ./deploy/production/deploy-remote.sh $IMAGE_REF ${{ vars.BACKEND_PUBLIC_IP }}" \
+            --timeout-seconds 60 \
+            --parameters "$PARAMETERS" \
             --query 'Command.CommandId' --output text)
           INSTANCE_ID="${{ vars.AWS_INSTANCE_ID }}"
+          echo "SSM command ID: $COMMAND_ID"
 
           print_invocation() {
             aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "$INSTANCE_ID" \
-              --query '{Status:Status,StandardOutputContent:StandardOutputContent,StandardErrorContent:StandardErrorContent}' \
+              --query '{Status:Status,StatusDetails:StatusDetails,ResponseCode:ResponseCode,ExecutionStartDateTime:ExecutionStartDateTime,ExecutionEndDateTime:ExecutionEndDateTime,StandardOutputContent:StandardOutputContent,StandardErrorContent:StandardErrorContent}' \
               --output json
           }
 
-          # The AWS CLI waiter's fixed 100-second timeout is shorter than our
-          # remote Docker/health-check window. Poll for up to six minutes.
-          for _ in $(seq 1 72); do
+          # SSM gets 60 seconds to deliver the command and 600 seconds to run
+          # it. Poll beyond that combined deadline so terminal output is kept.
+          LAST_STATUS=""
+          for _ in $(seq 1 144); do
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "$INSTANCE_ID" \
               --query 'Status' --output text 2>/dev/null || true)
+            if [[ "$STATUS" != "$LAST_STATUS" ]]; then
+              echo "SSM status: ${STATUS:-NotReady}"
+              LAST_STATUS="$STATUS"
+            fi
             case "$STATUS" in
               Success)
                 print_invocation
                 exit 0
                 ;;
-              Failed|Cancelled|TimedOut|Cancelling)
+              Failed|Cancelled|TimedOut)
                 print_invocation
                 exit 1
                 ;;
@@ -78,7 +108,10 @@ jobs:
             sleep 5
           done
 
-          print_invocation
+          aws ssm cancel-command \
+            --command-id "$COMMAND_ID" \
+            --instance-ids "$INSTANCE_ID" || true
+          print_invocation || true
           echo "Timed out waiting for the Systems Manager deployment" >&2
           exit 1
       - name: Verify public HTTPS health endpoint
