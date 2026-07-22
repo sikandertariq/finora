@@ -154,7 +154,19 @@ class ExpenseApproverService:
         self._llm = llm_provider
 
     def run(self, workflow: AgentWorkflow) -> AgentWorkflow:
-        workflow.mark_running()
+        # Celery may redeliver a task after a worker interruption. Claiming with a
+        # conditional update means only the first delivery can move this workflow
+        # out of pending; late deliveries cannot reopen a human decision.
+        with transaction.atomic():
+            claimed = AgentWorkflow.objects.filter(
+                pk=workflow.pk,
+                status=AgentWorkflow.Status.PENDING,
+            ).update(status=AgentWorkflow.Status.RUNNING, updated_at=timezone.now())
+            workflow = AgentWorkflow.objects.select_related("expense").get(pk=workflow.pk)
+
+        if not claimed:
+            return workflow
+
         deterministic_metadata = {
             **workflow.extracted_data,
             "policy_flags": _deterministic_policy_flags(
@@ -162,7 +174,22 @@ class ExpenseApproverService:
             ),
         }
         try:
-            response = self._llm.complete(self._build_messages(workflow))
+            response = self._llm.complete(
+                self._build_messages(
+                    workflow,
+                    policy_flags=deterministic_metadata["policy_flags"],
+                )
+            )
+        except Exception:
+            workflow.mark_needs_review(
+                extracted_data=deterministic_metadata,
+                error_message=(
+                    "Could not assess this expense because the provider request failed."
+                ),
+            )
+            return workflow
+
+        try:
             assessment = ExpenseApprovalAssessment(
                 **json.loads(_strip_code_fence(response.content))
             )
@@ -185,7 +212,7 @@ class ExpenseApproverService:
         return workflow
 
     @staticmethod
-    def _build_messages(workflow: AgentWorkflow) -> list[LLMMessage]:
+    def _build_messages(workflow: AgentWorkflow, *, policy_flags: list[str]) -> list[LLMMessage]:
         expense = workflow.expense
         policy = workflow.extracted_data.get("policy", {})
         historical_outcomes = []
@@ -232,7 +259,7 @@ class ExpenseApproverService:
                     })}\n"
                     f"Selected policy and deterministic flags: {json.dumps({
                         'policy': policy,
-                        'policy_flags': workflow.extracted_data.get('policy_flags', []),
+                        'policy_flags': policy_flags,
                     })}\n"
                     f"Recent tenant outcomes: {json.dumps(historical_outcomes)}"
                 ),
@@ -306,9 +333,10 @@ class AgentWorkflowService:
     @staticmethod
     def approve(workflow: AgentWorkflow, *, reviewed_by, overrides: dict | None = None) -> AgentWorkflow:
         if workflow.workflow_type == "expense_approver":
-            _require_needs_review(workflow)
-            return AgentWorkflowService._approve_expense_approver(
-                workflow, reviewed_by=reviewed_by
+            return AgentWorkflowService._decide_expense_approver(
+                workflow_id=workflow.pk,
+                reviewed_by=reviewed_by,
+                decision=AgentWorkflow.Status.APPROVED,
             )
         if workflow.workflow_type == "invoice_chaser":
             return AgentWorkflowService._approve_invoice_chaser(
@@ -344,17 +372,6 @@ class AgentWorkflowService:
         return workflow
 
     @staticmethod
-    def _approve_expense_approver(workflow: AgentWorkflow, *, reviewed_by) -> AgentWorkflow:
-        expense = workflow.expense
-        expense.approval_status = Expense.ApprovalStatus.APPROVED
-        expense.save(update_fields=["approval_status", "updated_at"])
-        workflow.mark_approved(reviewed_by=reviewed_by)
-        AuditLog.objects.create(
-            workflow=workflow, actor=reviewed_by, action="expense_approved"
-        )
-        return workflow
-
-    @staticmethod
     def _approve_invoice_chaser(workflow: AgentWorkflow, *, reviewed_by, overrides) -> AgentWorkflow:
         """Simulated send: writes what would have been emailed to AuditLog. No real
         SMTP/SendGrid call -- see the design spec's explicit non-goal on this."""
@@ -374,9 +391,11 @@ class AgentWorkflowService:
     @staticmethod
     def reject(workflow: AgentWorkflow, *, reviewed_by, note: str | None = None) -> AgentWorkflow:
         if workflow.workflow_type == "expense_approver":
-            _require_needs_review(workflow)
-            return AgentWorkflowService._reject_expense_approver(
-                workflow, reviewed_by=reviewed_by, note=note
+            return AgentWorkflowService._decide_expense_approver(
+                workflow_id=workflow.pk,
+                reviewed_by=reviewed_by,
+                decision=AgentWorkflow.Status.REJECTED,
+                note=note,
             )
         workflow.mark_rejected(reviewed_by=reviewed_by)
         AuditLog.objects.create(
@@ -388,17 +407,35 @@ class AgentWorkflowService:
         return workflow
 
     @staticmethod
-    def _reject_expense_approver(workflow: AgentWorkflow, *, reviewed_by, note) -> AgentWorkflow:
-        expense = workflow.expense
-        expense.approval_status = Expense.ApprovalStatus.REJECTED
-        expense.save(update_fields=["approval_status", "updated_at"])
-        workflow.mark_rejected(reviewed_by=reviewed_by)
-        AuditLog.objects.create(
-            workflow=workflow,
-            actor=reviewed_by,
-            action="expense_rejected",
-            metadata=_rejection_metadata(note),
-        )
+    def _decide_expense_approver(*, workflow_id, reviewed_by, decision, note=None) -> AgentWorkflow:
+        """Apply one human expense decision under row locks.
+
+        The workflow is refetched after locking rather than trusting the object
+        supplied by the view, which might be stale when two reviewers act at once.
+        """
+        with transaction.atomic():
+            workflow = AgentWorkflow.objects.select_for_update().get(pk=workflow_id)
+            expense = Expense.objects.select_for_update().get(pk=workflow.expense_id)
+            _require_needs_review(workflow)
+
+            if decision == AgentWorkflow.Status.APPROVED:
+                expense.approval_status = Expense.ApprovalStatus.APPROVED
+                audit_action = "expense_approved"
+                workflow.mark_approved(reviewed_by=reviewed_by)
+                metadata = {}
+            else:
+                expense.approval_status = Expense.ApprovalStatus.REJECTED
+                audit_action = "expense_rejected"
+                workflow.mark_rejected(reviewed_by=reviewed_by)
+                metadata = _rejection_metadata(note)
+
+            expense.save(update_fields=["approval_status", "updated_at"])
+            AuditLog.objects.create(
+                workflow=workflow,
+                actor=reviewed_by,
+                action=audit_action,
+                metadata=metadata,
+            )
         return workflow
 
 

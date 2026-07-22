@@ -163,6 +163,48 @@ def test_prompt_includes_expense_and_selected_policy_context():
     assert "Travel review" in prompt
     assert "Operations" in prompt
     assert "500.00" in prompt
+    assert "Amount exceeds the selected policy ceiling of 500.00." in prompt
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        AgentWorkflow.Status.RUNNING,
+        AgentWorkflow.Status.NEEDS_REVIEW,
+        AgentWorkflow.Status.APPROVED,
+        AgentWorkflow.Status.REJECTED,
+    ],
+)
+def test_redelivery_of_a_non_pending_workflow_is_a_noop(status):
+    workflow = _workflow()
+    workflow.status = status
+    workflow.save(update_fields=["status", "updated_at"])
+    original_data = workflow.extracted_data.copy()
+    provider = FakeLLMProvider(response=json.dumps(_VALID_ASSESSMENT))
+
+    ExpenseApproverService(provider).run(workflow)
+
+    workflow.refresh_from_db()
+    assert workflow.status == status
+    assert workflow.extracted_data == original_data
+    assert provider.calls == []
+
+
+def test_provider_failure_lands_the_claimed_workflow_in_review_with_deterministic_error():
+    class RaisingProvider:
+        def complete(self, messages, tools=None):
+            raise RuntimeError("upstream timeout")
+
+    workflow = _workflow()
+
+    ExpenseApproverService(RaisingProvider()).run(workflow)
+
+    workflow.refresh_from_db()
+    assert workflow.status == AgentWorkflow.Status.NEEDS_REVIEW
+    assert workflow.extracted_data["policy_flags"] == [
+        "Amount exceeds the selected policy ceiling of 500.00."
+    ]
+    assert workflow.error_message == "Could not assess this expense because the provider request failed."
 
 
 def test_prompt_includes_recent_approved_and_rejected_tenant_outcomes_only():

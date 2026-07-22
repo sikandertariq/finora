@@ -211,3 +211,48 @@ def test_reject_expense_approver_marks_the_expense_and_audits_the_human_note():
     assert audit.action == "expense_rejected"
     assert audit.actor_id == reviewer.id
     assert audit.metadata == {"note": "Duplicate reimbursement request."}
+
+
+@pytest.mark.parametrize("second_decision", ["approve", "reject"])
+def test_expense_decision_refetches_locked_state_and_never_overrides_a_prior_decision(
+    second_decision,
+):
+    workflow = _reviewable_workflow()
+    stale_workflow = AgentWorkflow.objects.get(pk=workflow.pk)
+    first_reviewer = UserFactory()
+    second_reviewer = UserFactory()
+
+    AgentWorkflowService.approve(workflow, reviewed_by=first_reviewer)
+
+    with pytest.raises(ValueError, match="needs_review"):
+        getattr(AgentWorkflowService, second_decision)(
+            stale_workflow, reviewed_by=second_reviewer
+        )
+
+    workflow.refresh_from_db()
+    workflow.expense.refresh_from_db()
+    assert workflow.status == AgentWorkflow.Status.APPROVED
+    assert workflow.expense.approval_status == Expense.ApprovalStatus.APPROVED
+    assert workflow.audit_logs.count() == 1
+
+
+def test_expense_decision_locks_and_refetches_the_workflow_and_expense(monkeypatch):
+    workflow = _reviewable_workflow()
+    locks = []
+    original_workflow_lock = AgentWorkflow.objects.select_for_update
+    original_expense_lock = Expense.objects.select_for_update
+
+    def lock_workflow(*args, **kwargs):
+        locks.append("workflow")
+        return original_workflow_lock(*args, **kwargs)
+
+    def lock_expense(*args, **kwargs):
+        locks.append("expense")
+        return original_expense_lock(*args, **kwargs)
+
+    monkeypatch.setattr(AgentWorkflow.objects, "select_for_update", lock_workflow)
+    monkeypatch.setattr(Expense.objects, "select_for_update", lock_expense)
+
+    AgentWorkflowService.approve(workflow, reviewed_by=UserFactory())
+
+    assert locks == ["workflow", "expense"]

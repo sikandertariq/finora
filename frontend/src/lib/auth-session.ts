@@ -17,7 +17,9 @@ function notify() {
 
 export function subscribeToAuthSession(listener: () => void) {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function getStoredAccessToken(): string | null {
