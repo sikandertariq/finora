@@ -46,7 +46,7 @@ jobs:
           COMMAND_ID=$(aws ssm send-command \
             --document-name AWS-RunShellScript \
             --instance-ids "${{ vars.AWS_INSTANCE_ID }}" \
-            --parameters commands="cd /srv/finora || git clone https://github.com/${{ github.repository }}.git /srv/finora; git config --global --add safe.directory /srv/finora; cd /srv/finora; git fetch origin main; git switch main; git pull --ff-only origin main; ./deploy/production/deploy-remote.sh $IMAGE_REF ${{ vars.BACKEND_PUBLIC_IP }}" \
+            --parameters commands="export HOME=/root; cd /srv/finora || git clone https://github.com/${{ github.repository }}.git /srv/finora; git config --global --add safe.directory /srv/finora; cd /srv/finora; git fetch origin main; git switch main; git pull --ff-only origin main; ./deploy/production/deploy-remote.sh $IMAGE_REF ${{ vars.BACKEND_PUBLIC_IP }}" \
             --query 'Command.CommandId' --output text)
           INSTANCE_ID="${{ vars.AWS_INSTANCE_ID }}"
 
