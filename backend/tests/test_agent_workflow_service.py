@@ -67,6 +67,26 @@ def test_approve_creates_an_expense_from_extracted_data():
     assert workflow.reviewed_by_id == user.id
 
 
+def test_pending_receipt_processor_workflow_keeps_its_existing_direct_approve_behavior():
+    user = UserFactory()
+    receipt = _receipt(user)
+    workflow = AgentWorkflow.objects.create(
+        receipt=receipt,
+        extracted_data={
+            "vendor": "Staples",
+            "amount": "42.50",
+            "currency": "USD",
+            "expense_date": "2026-07-01",
+        },
+    )
+
+    AgentWorkflowService.approve(workflow, reviewed_by=user)
+
+    workflow.refresh_from_db()
+    assert workflow.status == AgentWorkflow.Status.APPROVED
+    assert workflow.resulting_expense.vendor == "Staples"
+
+
 def test_approve_writes_an_audit_log_entry():
     user = UserFactory()
     receipt = _receipt(user)
@@ -197,3 +217,18 @@ def test_reject_an_invoice_chaser_workflow_needs_no_special_handling():
     assert workflow.status == AgentWorkflow.Status.REJECTED
     log = AuditLog.objects.get(workflow=workflow)
     assert log.action == "rejected"
+
+
+def test_pending_invoice_chaser_workflow_keeps_its_existing_direct_reject_behavior():
+    user = UserFactory()
+    invoice = Invoice.objects.create(
+        client_name="Acme", client_email="ap@acme.test", amount="100.00",
+        issue_date="2026-06-01", due_date="2026-06-15", status=Invoice.Status.SENT,
+    )
+    workflow = AgentWorkflow.objects.create(workflow_type="invoice_chaser", invoice=invoice)
+
+    AgentWorkflowService.reject(workflow, reviewed_by=user)
+
+    workflow.refresh_from_db()
+    assert workflow.status == AgentWorkflow.Status.REJECTED
+    assert AuditLog.objects.get(workflow=workflow).action == "rejected"

@@ -305,8 +305,8 @@ class AgentWorkflowService:
 
     @staticmethod
     def approve(workflow: AgentWorkflow, *, reviewed_by, overrides: dict | None = None) -> AgentWorkflow:
-        _require_needs_review(workflow)
         if workflow.workflow_type == "expense_approver":
+            _require_needs_review(workflow)
             return AgentWorkflowService._approve_expense_approver(
                 workflow, reviewed_by=reviewed_by
             )
@@ -373,8 +373,8 @@ class AgentWorkflowService:
 
     @staticmethod
     def reject(workflow: AgentWorkflow, *, reviewed_by, note: str | None = None) -> AgentWorkflow:
-        _require_needs_review(workflow)
         if workflow.workflow_type == "expense_approver":
+            _require_needs_review(workflow)
             return AgentWorkflowService._reject_expense_approver(
                 workflow, reviewed_by=reviewed_by, note=note
             )
