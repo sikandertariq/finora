@@ -11,7 +11,7 @@ BACKEND_PUBLIC_IP="$2"
 APP_DIR="/srv/finora"
 PARAMETER_PREFIX="/finora/production"
 
-"$APP_DIR/deploy/production/bootstrap-host.sh"
+bash "$APP_DIR/deploy/production/bootstrap-host.sh"
 
 parameter() {
   aws ssm get-parameter --with-decryption --name "$PARAMETER_PREFIX/$1" \
