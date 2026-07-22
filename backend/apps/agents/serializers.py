@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.expenses.serializers import ReceiptSerializer
+from apps.expenses.serializers import ExpenseSerializer, ReceiptSerializer
 from apps.invoices.serializers import InvoiceSerializer
 
 from .models import AgentWorkflow, AuditLog
@@ -9,6 +9,7 @@ from .models import AgentWorkflow, AuditLog
 class AgentWorkflowSerializer(serializers.ModelSerializer):
     receipt = ReceiptSerializer(read_only=True)
     invoice = InvoiceSerializer(read_only=True)
+    expense = ExpenseSerializer(read_only=True)
 
     class Meta:
         model = AgentWorkflow
@@ -18,6 +19,7 @@ class AgentWorkflowSerializer(serializers.ModelSerializer):
             "status",
             "receipt",
             "invoice",
+            "expense",
             "extracted_data",
             "error_message",
             "resulting_expense",

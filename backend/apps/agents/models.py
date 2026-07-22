@@ -30,6 +30,9 @@ class AgentWorkflow(TenantScopedModel):
     invoice = models.ForeignKey(
         Invoice, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_workflows"
     )
+    expense = models.ForeignKey(
+        Expense, on_delete=models.CASCADE, null=True, blank=True, related_name="agent_workflows"
+    )
     extracted_data = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True, default="")
     resulting_expense = models.OneToOneField(

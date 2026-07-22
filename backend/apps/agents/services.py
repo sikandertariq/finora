@@ -1,9 +1,11 @@
 import json
 import mimetypes
+from decimal import Decimal
 
 from django.utils import timezone
 from pydantic import ValidationError
 
+from apps.expenses.approval_schemas import ExpenseApprovalAssessment
 from apps.expenses.schemas import ReceiptExtraction
 from apps.expenses.services import ExpenseService
 from apps.invoices.models import Invoice
@@ -26,6 +28,15 @@ _INVOICE_CHASER_SYSTEM_PROMPT = (
     "You are an accounts-receivable assistant drafting a reminder email about an "
     "overdue invoice. Respond with ONLY a JSON object (no markdown, no commentary) "
     'matching this shape: {"subject": str, "body": str}. Match the requested tone.'
+)
+
+_EXPENSE_APPROVER_SYSTEM_PROMPT = (
+    "You are a finance assistant assessing an expense for a human reviewer. Respond with ONLY "
+    "a JSON object (no markdown, no commentary) matching this shape: "
+    '{"recommendation": "approve" | "reject" | "needs_more_information", '
+    '"rationale": str, "policy_flags": [str], "anomaly_flags": [str], '
+    '"confidence": float between 0 and 1}. Do not approve or reject the expense yourself; '
+    "provide a recommendation for a person to review."
 )
 
 # (threshold_days, level_key, tone) -- shared with InvoiceChaserScheduler (Task 7).
@@ -128,6 +139,99 @@ class InvoiceChaserService:
                     f"Draft {tone} to {invoice.client_name} <{invoice.client_email}> "
                     f"about their invoice for {invoice.amount} {invoice.currency}, "
                     f"which was due on {invoice.due_date}."
+                ),
+            ),
+        ]
+
+
+class ExpenseApproverService:
+    """Runs an LLM-backed assessment while preserving deterministic policy context."""
+
+    def __init__(self, llm_provider: LLMProvider):
+        self._llm = llm_provider
+
+    def run(self, workflow: AgentWorkflow) -> AgentWorkflow:
+        workflow.mark_running()
+        deterministic_metadata = {
+            **workflow.extracted_data,
+            "policy_flags": _deterministic_policy_flags(
+                workflow.expense, workflow.extracted_data
+            ),
+        }
+        try:
+            response = self._llm.complete(self._build_messages(workflow))
+            assessment = ExpenseApprovalAssessment(
+                **json.loads(_strip_code_fence(response.content))
+            )
+        except (json.JSONDecodeError, TypeError, ValidationError) as exc:
+            workflow.mark_needs_review(
+                extracted_data=deterministic_metadata,
+                error_message=f"Could not assess this expense: {exc}",
+            )
+            return workflow
+
+        assessment_data = assessment.model_dump(mode="json")
+        deterministic_flags = deterministic_metadata.get("policy_flags", [])
+        workflow.mark_needs_review(
+            extracted_data={
+                **deterministic_metadata,
+                **assessment_data,
+                "policy_flags": [*deterministic_flags, *assessment_data["policy_flags"]],
+            }
+        )
+        return workflow
+
+    @staticmethod
+    def _build_messages(workflow: AgentWorkflow) -> list[LLMMessage]:
+        expense = workflow.expense
+        policy = workflow.extracted_data.get("policy", {})
+        historical_outcomes = []
+        recent_workflows = (
+            AgentWorkflow.objects.filter(
+                workflow_type="expense_approver",
+                status__in=[AgentWorkflow.Status.APPROVED, AgentWorkflow.Status.REJECTED],
+            )
+            .exclude(pk=workflow.pk)
+            .select_related("expense")
+            .order_by("-updated_at")[:5]
+        )
+        for prior_workflow in recent_workflows:
+            prior_expense = prior_workflow.expense
+            historical_outcomes.append(
+                {
+                    "outcome": prior_workflow.status,
+                    "expense": {
+                        "vendor": prior_expense.vendor,
+                        "amount": str(prior_expense.amount),
+                        "currency": prior_expense.currency,
+                        "category": prior_expense.category,
+                    },
+                    "assessment": {
+                        key: prior_workflow.extracted_data.get(key)
+                        for key in ("recommendation", "rationale", "policy_flags", "anomaly_flags")
+                        if key in prior_workflow.extracted_data
+                    },
+                }
+            )
+        return [
+            LLMMessage(role="system", content=_EXPENSE_APPROVER_SYSTEM_PROMPT),
+            LLMMessage(
+                role="user",
+                content=(
+                    "Assess this expense for human review.\n"
+                    f"Expense: {json.dumps({
+                        'vendor': expense.vendor,
+                        'amount': str(expense.amount),
+                        'currency': expense.currency,
+                        'category': expense.category,
+                        'description': expense.description,
+                        'expense_date': str(expense.expense_date),
+                    })}\n"
+                    f"Selected policy and deterministic flags: {json.dumps({
+                        'policy': policy,
+                        'policy_flags': workflow.extracted_data.get('policy_flags', []),
+                    })}\n"
+                    f"Recent tenant outcomes: {json.dumps(historical_outcomes)}"
                 ),
             ),
         ]
@@ -263,3 +367,16 @@ def _strip_code_fence(text: str) -> str:
     if stripped.startswith("json"):
         stripped = stripped[len("json") :]
     return stripped.strip()
+
+
+def _deterministic_policy_flags(expense, metadata: dict) -> list[str]:
+    flags = list(metadata.get("policy_flags", []))
+    maximum_amount = metadata.get("policy", {}).get("maximum_amount")
+    if maximum_amount is None:
+        return flags
+
+    if Decimal(str(expense.amount)) > Decimal(str(maximum_amount)):
+        flag = f"Amount exceeds the selected policy ceiling of {maximum_amount}."
+        if flag not in flags:
+            flags.append(flag)
+    return flags
