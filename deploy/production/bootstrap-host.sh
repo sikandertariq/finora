@@ -4,7 +4,17 @@ set -euo pipefail
 if ! command -v aws >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y awscli ca-certificates certbot curl gettext-base git nginx snapd
+  apt-get install -y ca-certificates certbot curl gettext-base git nginx snapd unzip
+
+  rm -rf /tmp/aws /tmp/awscliv2.zip
+  curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
+  unzip -q /tmp/awscliv2.zip -d /tmp
+  if command -v aws >/dev/null 2>&1; then
+    /tmp/aws/install --update
+  else
+    /tmp/aws/install
+  fi
+  rm -rf /tmp/aws /tmp/awscliv2.zip
 
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
