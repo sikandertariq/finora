@@ -35,23 +35,6 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.image-meta.outputs.tags }}
           labels: ${{ steps.image-meta.outputs.labels }}
-      - name: Report OIDC identity claims
-        run: |
-          TOKEN="$(curl -sS \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["value"])')"
-          export TOKEN
-          python3 - <<'PY'
-          import base64
-          import json
-          import os
-
-          payload = os.environ["TOKEN"].split(".")[1]
-          payload += "=" * (-len(payload) % 4)
-          claims = json.loads(base64.urlsafe_b64decode(payload))
-          print(json.dumps({key: claims.get(key) for key in ("aud", "sub", "repository", "ref", "workflow_ref")}, indent=2))
-          PY
       - uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
@@ -65,7 +48,15 @@ jobs:
             --instance-ids "${{ vars.AWS_INSTANCE_ID }}" \
             --parameters commands="cd /srv/finora || git clone https://github.com/${{ github.repository }}.git /srv/finora; cd /srv/finora; git fetch origin main; git switch main; git pull --ff-only origin main; ./deploy/production/deploy-remote.sh $IMAGE_REF ${{ vars.BACKEND_PUBLIC_IP }}" \
             --query 'Command.CommandId' --output text)
+          set +e
           aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "${{ vars.AWS_INSTANCE_ID }}"
-          aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "${{ vars.AWS_INSTANCE_ID }}"
+          WAIT_STATUS=$?
+          set -e
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ vars.AWS_INSTANCE_ID }}" \
+            --query '{Status:Status,StandardOutputContent:StandardOutputContent,StandardErrorContent:StandardErrorContent}' \
+            --output json
+          exit "$WAIT_STATUS"
       - name: Verify public HTTPS health endpoint
         run: curl --fail --retry 6 --retry-delay 5 "https://${{ vars.BACKEND_PUBLIC_IP }}/api/health/"
