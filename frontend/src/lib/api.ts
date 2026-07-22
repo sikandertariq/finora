@@ -1,6 +1,9 @@
 import type {
   AgentWorkflow,
   ConfirmWorkflowOverrides,
+  Expense,
+  ExpenseApprovalPolicy,
+  ExpenseApprovalPolicyInput,
   Invoice,
 } from "@/lib/types";
 import {
@@ -133,16 +136,57 @@ export function confirmWorkflow(
   );
 }
 
-export function rejectWorkflow(id: number, token: string) {
+export function rejectWorkflow(id: number, note: string | undefined, token: string) {
   return request<AgentWorkflow>(
     `/agent-workflows/${id}/reject/`,
-    { method: "POST", body: JSON.stringify({}) },
+    { method: "POST", body: JSON.stringify(note ? { note } : {}) },
     token
   );
 }
 
 export function listInvoices(token: string) {
   return request<Invoice[]>("/invoices/", {}, token);
+}
+
+export function listExpenses(token: string) {
+  return request<Expense[]>("/expenses/", {}, token);
+}
+
+export function requestExpenseApproval(id: number, token: string) {
+  return request<AgentWorkflow>(
+    `/expenses/${id}/request-approval/`,
+    { method: "POST", body: JSON.stringify({}) },
+    token
+  );
+}
+
+export function listExpenseApprovalPolicies(token: string) {
+  return request<ExpenseApprovalPolicy[]>("/expense-approval-policies/", {}, token);
+}
+
+export function createExpenseApprovalPolicy(
+  data: ExpenseApprovalPolicyInput,
+  token: string
+) {
+  return request<ExpenseApprovalPolicy>("/expense-approval-policies/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  }, token);
+}
+
+export function updateExpenseApprovalPolicy(
+  id: number,
+  data: ExpenseApprovalPolicyInput,
+  token: string
+) {
+  return request<ExpenseApprovalPolicy>(`/expense-approval-policies/${id}/`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  }, token);
+}
+
+export function deleteExpenseApprovalPolicy(id: number, token: string) {
+  return request<void>(`/expense-approval-policies/${id}/`, { method: "DELETE" }, token);
 }
 
 export function listWorkflows(

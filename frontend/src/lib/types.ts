@@ -37,6 +37,12 @@ export interface ExtractedWorkflowData {
   escalation_level?: string;
   subject?: string;
   body?: string;
+  policy?: ExpenseApprovalPolicySnapshot;
+  approval_queue?: string;
+  recommendation?: "approve" | "reject" | "needs_more_information";
+  rationale?: string;
+  policy_flags?: string[];
+  anomaly_flags?: string[];
 }
 
 export interface Invoice {
@@ -58,6 +64,7 @@ export interface AgentWorkflow {
   status: WorkflowStatus;
   receipt: Receipt | null;
   invoice: Invoice | null;
+  expense: Expense | null;
   extracted_data: ExtractedWorkflowData;
   error_message: string;
   resulting_expense: number | null;
@@ -75,8 +82,40 @@ export interface Expense {
   expense_date: string;
   receipt: number | null;
   created_by: number | null;
+  approval_status: "not_requested" | "pending" | "approved" | "rejected";
   created_at: string;
   updated_at: string;
+}
+
+export interface ExpenseApprovalPolicy {
+  id: number;
+  name: string;
+  priority: number;
+  category: string;
+  minimum_amount: string;
+  maximum_amount: string | null;
+  approval_queue: string;
+  is_active: boolean;
+}
+
+export interface ExpenseApprovalPolicySnapshot {
+  id?: number;
+  name?: string;
+  priority?: number;
+  category?: string;
+  minimum_amount?: string;
+  maximum_amount?: string | null;
+  approval_queue?: string;
+}
+
+export interface ExpenseApprovalPolicyInput {
+  name: string;
+  priority: number;
+  category: string;
+  minimum_amount: string;
+  maximum_amount: string | null;
+  approval_queue: string;
+  is_active: boolean;
 }
 
 // What a human can override on the AI's output before it's acted on.

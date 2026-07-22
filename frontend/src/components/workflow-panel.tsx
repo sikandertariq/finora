@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ReviewForm } from "@/components/review-form";
 import { ReminderReview } from "@/components/reminder-review";
+import { ExpenseApprovalReview } from "@/components/expense-approval-review";
 
 const STATUS_LABEL: Record<WorkflowStatus, string> = {
   pending: "Waiting to be processed",
@@ -37,9 +38,12 @@ export function WorkflowPanel() {
   }
 
   const isInvoiceChaser = workflow.workflow_type === "invoice_chaser";
+  const isExpenseApprover = workflow.workflow_type === "expense_approver";
   const title = isInvoiceChaser
     ? `Invoice reminder #${workflow.invoice?.id ?? workflow.id}`
-    : `Receipt #${workflow.receipt?.id ?? workflow.id}`;
+    : isExpenseApprover
+      ? `Expense approval #${workflow.expense?.id ?? workflow.id}`
+      : `Receipt #${workflow.receipt?.id ?? workflow.id}`;
 
   return (
     <Card className="w-full max-w-md">
@@ -58,6 +62,8 @@ export function WorkflowPanel() {
         {workflow.status === "needs_review" &&
           (isInvoiceChaser ? (
             <ReminderReview workflow={workflow} />
+          ) : isExpenseApprover ? (
+            <ExpenseApprovalReview workflow={workflow} />
           ) : (
             <ReviewForm workflow={workflow} />
           ))}
@@ -66,7 +72,9 @@ export function WorkflowPanel() {
         )}
         {workflow.status === "approved" && !isInvoiceChaser && (
           <p className="text-sm text-muted-foreground">
-            Saved as expense #{workflow.resulting_expense}.
+            {isExpenseApprover
+              ? `Expense #${workflow.expense?.id ?? workflow.id} approved.`
+              : `Saved as expense #${workflow.resulting_expense}.`}
           </p>
         )}
         {workflow.status === "rejected" && isInvoiceChaser && (
@@ -76,7 +84,9 @@ export function WorkflowPanel() {
         )}
         {workflow.status === "rejected" && !isInvoiceChaser && (
           <p className="text-sm text-muted-foreground">
-            This receipt was rejected — no expense was created.
+            {isExpenseApprover
+              ? `Expense #${workflow.expense?.id ?? workflow.id} was rejected.`
+              : "This receipt was rejected — no expense was created."}
           </p>
         )}
         {workflow.error_message && (

@@ -49,6 +49,7 @@ export function useConfirmWorkflow(id: number) {
     onSuccess: (workflow) => {
       queryClient.setQueryData(["agent-workflow", id], workflow);
       queryClient.invalidateQueries({ queryKey: ["agent-workflows"] });
+      queryClient.invalidateQueries({ queryKey: ["expenses"] });
     },
   });
 }
@@ -58,10 +59,11 @@ export function useRejectWorkflow(id: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: () => api.rejectWorkflow(id, token as string),
+    mutationFn: (note?: string) => api.rejectWorkflow(id, note, token as string),
     onSuccess: (workflow) => {
       queryClient.setQueryData(["agent-workflow", id], workflow);
       queryClient.invalidateQueries({ queryKey: ["agent-workflows"] });
+      queryClient.invalidateQueries({ queryKey: ["expenses"] });
     },
   });
 }
