@@ -38,7 +38,11 @@ ln -sfn /snap/bin/certbot /usr/local/bin/certbot
 
 mkdir -p /srv/finora/data/{postgres,redis,media,celery-beat,backups}
 mkdir -p /etc/finora
-chown -R ubuntu:ubuntu /srv/finora
+# PostgreSQL and Redis own their bind-mounted data as their container user.
+# Never recursively chown /srv/finora here: doing so corrupts those ownership
+# expectations and prevents PostgreSQL from starting after a host reboot.
+chown ubuntu:ubuntu /srv/finora
+chown -R 999:999 /srv/finora/data/postgres /srv/finora/data/redis
 usermod -aG docker ubuntu
 printf '0 */6 * * * root /srv/finora/deploy/production/renew-certificates.sh\n' > /etc/cron.d/finora-certbot
 chmod 644 /etc/cron.d/finora-certbot

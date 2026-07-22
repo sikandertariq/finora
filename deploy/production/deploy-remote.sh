@@ -30,6 +30,10 @@ mkdir -p "$APP_DIR/data/backups"
 envsubst < "$APP_DIR/deploy/production/runtime.env.template" > "$APP_DIR/.env.production"
 chmod 600 "$APP_DIR/.env.production"
 
+# The database and cache containers run as their unprivileged image user.
+# Restore the ownership that an older host bootstrap incorrectly overwrote.
+chown -R 999:999 "$APP_DIR/data/postgres" "$APP_DIR/data/redis"
+
 cd "$APP_DIR"
 CERTBOT_EMAIL=""
 if [[ -f /etc/finora/certbot-email ]]; then
