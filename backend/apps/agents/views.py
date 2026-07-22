@@ -1,4 +1,4 @@
-from rest_framework import viewsets
+from rest_framework import serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -38,20 +38,26 @@ class AgentWorkflowViewSet(viewsets.ReadOnlyModelViewSet):
         workflow = self.get_object()
         serializer = ConfirmWorkflowSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        workflow = AgentWorkflowService.approve(
-            workflow, reviewed_by=request.user, overrides=serializer.validated_data
-        )
+        try:
+            workflow = AgentWorkflowService.approve(
+                workflow, reviewed_by=request.user, overrides=serializer.validated_data
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({"detail": str(exc)}) from exc
         return Response(AgentWorkflowSerializer(workflow).data)
 
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
         serializer = RejectWorkflowSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        workflow = AgentWorkflowService.reject(
-            self.get_object(),
-            reviewed_by=request.user,
-            note=serializer.validated_data.get("note"),
-        )
+        try:
+            workflow = AgentWorkflowService.reject(
+                self.get_object(),
+                reviewed_by=request.user,
+                note=serializer.validated_data.get("note"),
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({"detail": str(exc)}) from exc
         return Response(AgentWorkflowSerializer(workflow).data)
 
 

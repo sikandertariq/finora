@@ -2,6 +2,7 @@ import json
 import mimetypes
 from decimal import Decimal
 
+from django.db import transaction
 from django.utils import timezone
 from pydantic import ValidationError
 
@@ -304,6 +305,7 @@ class AgentWorkflowService:
 
     @staticmethod
     def approve(workflow: AgentWorkflow, *, reviewed_by, overrides: dict | None = None) -> AgentWorkflow:
+        _require_needs_review(workflow)
         if workflow.workflow_type == "expense_approver":
             return AgentWorkflowService._approve_expense_approver(
                 workflow, reviewed_by=reviewed_by
@@ -371,6 +373,7 @@ class AgentWorkflowService:
 
     @staticmethod
     def reject(workflow: AgentWorkflow, *, reviewed_by, note: str | None = None) -> AgentWorkflow:
+        _require_needs_review(workflow)
         if workflow.workflow_type == "expense_approver":
             return AgentWorkflowService._reject_expense_approver(
                 workflow, reviewed_by=reviewed_by, note=note
@@ -410,28 +413,33 @@ class ExpenseApprovalService:
 
     @classmethod
     def start(cls, expense) -> AgentWorkflow:
-        if AgentWorkflow.objects.filter(
-            workflow_type="expense_approver",
-            expense=expense,
-            status__in=cls._ACTIVE_STATUSES,
-        ).exists():
-            raise ValueError("Expense already has an active expense approval workflow.")
-
-        policy = ExpenseApprovalPolicyService.matching_policy(expense)
-        workflow = AgentWorkflow.objects.create(
-            workflow_type="expense_approver",
-            expense=expense,
-            extracted_data={
-                "policy": _policy_metadata(policy),
-                "approval_queue": policy.approval_queue if policy else "Finance",
-            },
-        )
-        expense.approval_status = Expense.ApprovalStatus.PENDING
-        expense.save(update_fields=["approval_status", "updated_at"])
-
         from .tasks import run_expense_approver
 
-        run_expense_approver.delay(tenant_id=expense.tenant_id, workflow_id=workflow.id)
+        with transaction.atomic():
+            expense = Expense.objects.select_for_update().get(pk=expense.pk)
+            if AgentWorkflow.objects.filter(
+                workflow_type="expense_approver",
+                expense=expense,
+                status__in=cls._ACTIVE_STATUSES,
+            ).exists():
+                raise ValueError("Expense already has an active expense approval workflow.")
+
+            policy = ExpenseApprovalPolicyService.matching_policy(expense)
+            workflow = AgentWorkflow.objects.create(
+                workflow_type="expense_approver",
+                expense=expense,
+                extracted_data={
+                    "policy": _policy_metadata(policy),
+                    "approval_queue": policy.approval_queue if policy else "Finance",
+                },
+            )
+            expense.approval_status = Expense.ApprovalStatus.PENDING
+            expense.save(update_fields=["approval_status", "updated_at"])
+            transaction.on_commit(
+                lambda: run_expense_approver.delay(
+                    tenant_id=expense.tenant_id, workflow_id=workflow.id
+                )
+            )
         return workflow
 
 
@@ -463,6 +471,11 @@ def _policy_metadata(policy) -> dict:
 
 def _rejection_metadata(note: str | None) -> dict:
     return {"note": note} if note is not None else {}
+
+
+def _require_needs_review(workflow: AgentWorkflow) -> None:
+    if workflow.status != AgentWorkflow.Status.NEEDS_REVIEW:
+        raise ValueError("Workflow must be in needs_review before a human decision.")
 
 
 def _deterministic_policy_flags(expense, metadata: dict) -> list[str]:

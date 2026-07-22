@@ -43,14 +43,15 @@ def _policy():
 
 
 def test_start_persists_selected_policy_marks_expense_pending_and_enqueues_task(
-    tenant_context, monkeypatch
+    tenant_context, monkeypatch, django_capture_on_commit_callbacks
 ):
     expense = _expense()
     policy = _policy()
     calls = []
     monkeypatch.setattr(tasks.run_expense_approver, "delay", lambda **kw: calls.append(kw))
 
-    workflow = ExpenseApprovalService.start(expense)
+    with django_capture_on_commit_callbacks(execute=True):
+        workflow = ExpenseApprovalService.start(expense)
 
     expense.refresh_from_db()
     assert workflow.workflow_type == "expense_approver"
@@ -67,6 +68,43 @@ def test_start_persists_selected_policy_marks_expense_pending_and_enqueues_task(
     }
     assert expense.approval_status == Expense.ApprovalStatus.PENDING
     assert calls == [{"tenant_id": tenant_context.id, "workflow_id": workflow.id}]
+
+
+def test_start_defers_task_dispatch_until_its_transaction_commits(
+    monkeypatch, django_capture_on_commit_callbacks
+):
+    expense = _expense()
+    calls = []
+    monkeypatch.setattr(tasks.run_expense_approver, "delay", lambda **kw: calls.append(kw))
+
+    with django_capture_on_commit_callbacks(execute=False) as callbacks:
+        workflow = ExpenseApprovalService.start(expense)
+        assert calls == []
+
+    assert len(callbacks) == 1
+    callbacks[0]()
+    assert calls == [{"tenant_id": expense.tenant_id, "workflow_id": workflow.id}]
+
+
+def test_start_locks_and_refetches_the_tenant_scoped_expense_before_creating_workflow(
+    monkeypatch, django_capture_on_commit_callbacks
+):
+    expense = _expense()
+    locked = []
+    original = Expense.objects.select_for_update
+
+    def select_for_update(*args, **kwargs):
+        locked.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(Expense.objects, "select_for_update", select_for_update)
+    monkeypatch.setattr(tasks.run_expense_approver, "delay", lambda **kw: None)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        workflow = ExpenseApprovalService.start(expense)
+
+    assert locked == [((), {})]
+    assert workflow.expense_id == expense.id
 
 
 def test_start_uses_the_default_finance_queue_when_no_policy_matches(monkeypatch):
@@ -114,6 +152,31 @@ def _reviewable_workflow():
     )
     workflow.mark_needs_review(extracted_data=workflow.extracted_data)
     return workflow
+
+
+def _active_workflow(status):
+    workflow = _reviewable_workflow()
+    workflow.status = status
+    workflow.save(update_fields=["status", "updated_at"])
+    return workflow
+
+
+@pytest.mark.parametrize("status", [AgentWorkflow.Status.PENDING, AgentWorkflow.Status.RUNNING])
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+def test_expense_approver_decisions_require_needs_review_and_leave_active_rows_unchanged(
+    status, decision
+):
+    workflow = _active_workflow(status)
+    reviewer = UserFactory()
+
+    with pytest.raises(ValueError, match="needs_review"):
+        getattr(AgentWorkflowService, decision)(workflow, reviewed_by=reviewer)
+
+    workflow.refresh_from_db()
+    workflow.expense.refresh_from_db()
+    assert workflow.status == status
+    assert workflow.expense.approval_status == Expense.ApprovalStatus.PENDING
+    assert not workflow.audit_logs.exists()
 
 
 def test_approve_expense_approver_marks_the_expense_and_writes_specific_audit_event():
