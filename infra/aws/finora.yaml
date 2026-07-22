@@ -11,6 +11,14 @@ Parameters:
   GitHubBranch:
     Type: String
     Default: main
+  GitHubRepositoryOwnerId:
+    Type: String
+    Default: '89202153'
+    Description: Numeric GitHub owner ID used in this repository's OIDC subject claim.
+  GitHubRepositoryId:
+    Type: String
+    Default: '1307919415'
+    Description: Numeric GitHub repository ID used in this repository's OIDC subject claim.
   NotificationEmail:
     Type: String
     Description: Email address for AWS Budget alerts.
@@ -199,7 +207,12 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
-                token.actions.githubusercontent.com:sub: !Sub repo:${RepositoryOwner}/${RepositoryName}:ref:refs/heads/${GitHubBranch}
+                # GitHub supports both its original owner/repository subject and
+                # the ID-bound subject format enabled for this repository.  Both
+                # remain restricted to this exact repository and branch.
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${RepositoryOwner}/${RepositoryName}:ref:refs/heads/${GitHubBranch}
+                  - !Sub repo:${RepositoryOwner}@${GitHubRepositoryOwnerId}/${RepositoryName}@${GitHubRepositoryId}:ref:refs/heads/${GitHubBranch}
       Policies:
         - PolicyName: DeployAndControlOnlyFinora
           PolicyDocument:
