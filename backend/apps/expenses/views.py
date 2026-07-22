@@ -1,10 +1,11 @@
-from rest_framework import generics, status, viewsets
+from rest_framework import generics, serializers, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
 from apps.agents.serializers import AgentWorkflowSerializer
-from apps.agents.services import AgentWorkflowService
+from apps.agents.services import AgentWorkflowService, ExpenseApprovalService
 from apps.tenancy.permissions import IsTenantMember
 
 from .models import Expense, ExpenseApprovalPolicy, Receipt
@@ -23,6 +24,14 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         # Not a `queryset =` class attribute: that's evaluated once at import time,
         # before any request has set the tenant context. get_queryset() runs per-request.
         return Expense.objects.all()
+
+    @action(detail=True, methods=["post"], url_path="request-approval")
+    def request_approval(self, request, pk=None):
+        try:
+            workflow = ExpenseApprovalService.start(self.get_object())
+        except ValueError as exc:
+            raise serializers.ValidationError({"detail": str(exc)}) from exc
+        return Response(AgentWorkflowSerializer(workflow).data, status=status.HTTP_201_CREATED)
 
 
 class ExpenseApprovalPolicyViewSet(viewsets.ModelViewSet):

@@ -2,7 +2,7 @@ import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.agents.models import AgentWorkflow
-from apps.expenses.models import Receipt
+from apps.expenses.models import Expense, Receipt
 from apps.invoices.models import Invoice
 from apps.tenancy import context
 
@@ -152,3 +152,76 @@ def test_filter_workflows_by_status(authed_client):
     resp = authed_client.get("/api/agent-workflows/?status=needs_review")
 
     assert [w["id"] for w in resp.data] == [needs_review.id]
+
+
+def _needs_review_expense_workflow(tenant):
+    context.set_current_tenant(tenant.id)
+    try:
+        expense = Expense.objects.create(
+            vendor="Railway Co.", amount="650.00", category="travel",
+            expense_date="2026-07-20",
+        )
+        expense.approval_status = Expense.ApprovalStatus.PENDING
+        expense.save(update_fields=["approval_status", "updated_at"])
+        workflow = AgentWorkflow.objects.create(
+            workflow_type="expense_approver", expense=expense,
+            extracted_data={"policy": {"approval_queue": "Operations"}},
+        )
+        workflow.mark_needs_review(extracted_data=workflow.extracted_data)
+        return workflow
+    finally:
+        context.clear_current_tenant()
+
+
+def test_filter_workflows_by_expense_approver_type(authed_client):
+    expense_workflow = _needs_review_expense_workflow(authed_client.tenant)
+    _needs_review_workflow(authed_client.tenant)
+
+    response = authed_client.get("/api/agent-workflows/?workflow_type=expense_approver")
+
+    assert [workflow["id"] for workflow in response.data] == [expense_workflow.id]
+    assert response.data[0]["expense"]["vendor"] == "Railway Co."
+
+
+def test_confirm_expense_approver_marks_the_linked_expense_approved_and_audits(authed_client):
+    workflow = _needs_review_expense_workflow(authed_client.tenant)
+
+    response = authed_client.post(f"/api/agent-workflows/{workflow.id}/confirm/", {}, format="json")
+
+    assert response.status_code == 200, response.data
+    assert response.data["status"] == "approved"
+    expense = authed_client.get(f"/api/expenses/{workflow.expense_id}/").data
+    assert expense["approval_status"] == "approved"
+    audit = authed_client.get(f"/api/audit-logs/?workflow={workflow.id}").data[0]
+    assert audit["action"] == "expense_approved"
+
+
+def test_reject_expense_approver_marks_the_linked_expense_rejected_and_audits_note(authed_client):
+    workflow = _needs_review_expense_workflow(authed_client.tenant)
+
+    response = authed_client.post(
+        f"/api/agent-workflows/{workflow.id}/reject/",
+        {"note": "Duplicate reimbursement request."},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.data["status"] == "rejected"
+    expense = authed_client.get(f"/api/expenses/{workflow.expense_id}/").data
+    assert expense["approval_status"] == "rejected"
+    audit = authed_client.get(f"/api/audit-logs/?workflow={workflow.id}").data[0]
+    assert audit["action"] == "expense_rejected"
+    assert audit["metadata"] == {"note": "Duplicate reimbursement request."}
+
+
+def test_reject_receipt_workflow_records_an_optional_note(authed_client):
+    workflow = _needs_review_workflow(authed_client.tenant)
+
+    response = authed_client.post(
+        f"/api/agent-workflows/{workflow.id}/reject/", {"note": "Unreadable receipt."}, format="json"
+    )
+
+    assert response.status_code == 200, response.data
+    audit = authed_client.get(f"/api/audit-logs/?workflow={workflow.id}").data[0]
+    assert audit["action"] == "rejected"
+    assert audit["metadata"] == {"note": "Unreadable receipt."}

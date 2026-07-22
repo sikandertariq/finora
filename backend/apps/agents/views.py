@@ -6,7 +6,12 @@ from rest_framework.response import Response
 from apps.tenancy.permissions import IsTenantMember
 
 from .models import AgentWorkflow, AuditLog
-from .serializers import AgentWorkflowSerializer, AuditLogSerializer, ConfirmWorkflowSerializer
+from .serializers import (
+    AgentWorkflowSerializer,
+    AuditLogSerializer,
+    ConfirmWorkflowSerializer,
+    RejectWorkflowSerializer,
+)
 from .services import AgentWorkflowService
 
 
@@ -40,7 +45,13 @@ class AgentWorkflowViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
-        workflow = AgentWorkflowService.reject(self.get_object(), reviewed_by=request.user)
+        serializer = RejectWorkflowSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        workflow = AgentWorkflowService.reject(
+            self.get_object(),
+            reviewed_by=request.user,
+            note=serializer.validated_data.get("note"),
+        )
         return Response(AgentWorkflowSerializer(workflow).data)
 
 

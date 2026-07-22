@@ -46,6 +46,12 @@ class ConfirmWorkflowSerializer(serializers.Serializer):
     body = serializers.CharField(required=False)
 
 
+class RejectWorkflowSerializer(serializers.Serializer):
+    """Optional human context for a rejected reviewable workflow."""
+
+    note = serializers.CharField(required=False, allow_blank=True)
+
+
 class AuditLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = AuditLog

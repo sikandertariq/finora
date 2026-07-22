@@ -8,9 +8,9 @@ from apps.tenancy.models import TenantScopedModel
 class AgentWorkflow(TenantScopedModel):
     """One run of an agent against one piece of input, reviewable and reversible.
 
-    ``workflow_type`` identifies which agent produced this row: "receipt_processor" or
-    "invoice_chaser" so far. Exactly one of ``receipt``/``invoice`` is set, depending on
-    which. Not a generic polymorphic link on purpose -- see
+    ``workflow_type`` identifies which agent produced this row. Exactly one of
+    ``receipt``/``invoice``/``expense`` is set, depending on which agent owns the run.
+    Not a generic polymorphic link on purpose -- see
     docs/superpowers/specs/2026-07-06-invoice-chaser-design.md for why this was punted
     rather than guessed at with only one agent's needs as evidence.
     """

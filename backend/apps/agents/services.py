@@ -6,6 +6,8 @@ from django.utils import timezone
 from pydantic import ValidationError
 
 from apps.expenses.approval_schemas import ExpenseApprovalAssessment
+from apps.expenses.approval_services import ExpenseApprovalPolicyService
+from apps.expenses.models import Expense
 from apps.expenses.schemas import ReceiptExtraction
 from apps.expenses.services import ExpenseService
 from apps.invoices.models import Invoice
@@ -302,6 +304,10 @@ class AgentWorkflowService:
 
     @staticmethod
     def approve(workflow: AgentWorkflow, *, reviewed_by, overrides: dict | None = None) -> AgentWorkflow:
+        if workflow.workflow_type == "expense_approver":
+            return AgentWorkflowService._approve_expense_approver(
+                workflow, reviewed_by=reviewed_by
+            )
         if workflow.workflow_type == "invoice_chaser":
             return AgentWorkflowService._approve_invoice_chaser(
                 workflow, reviewed_by=reviewed_by, overrides=overrides
@@ -336,6 +342,17 @@ class AgentWorkflowService:
         return workflow
 
     @staticmethod
+    def _approve_expense_approver(workflow: AgentWorkflow, *, reviewed_by) -> AgentWorkflow:
+        expense = workflow.expense
+        expense.approval_status = Expense.ApprovalStatus.APPROVED
+        expense.save(update_fields=["approval_status", "updated_at"])
+        workflow.mark_approved(reviewed_by=reviewed_by)
+        AuditLog.objects.create(
+            workflow=workflow, actor=reviewed_by, action="expense_approved"
+        )
+        return workflow
+
+    @staticmethod
     def _approve_invoice_chaser(workflow: AgentWorkflow, *, reviewed_by, overrides) -> AgentWorkflow:
         """Simulated send: writes what would have been emailed to AuditLog. No real
         SMTP/SendGrid call -- see the design spec's explicit non-goal on this."""
@@ -353,9 +370,68 @@ class AgentWorkflowService:
         return workflow
 
     @staticmethod
-    def reject(workflow: AgentWorkflow, *, reviewed_by) -> AgentWorkflow:
+    def reject(workflow: AgentWorkflow, *, reviewed_by, note: str | None = None) -> AgentWorkflow:
+        if workflow.workflow_type == "expense_approver":
+            return AgentWorkflowService._reject_expense_approver(
+                workflow, reviewed_by=reviewed_by, note=note
+            )
         workflow.mark_rejected(reviewed_by=reviewed_by)
-        AuditLog.objects.create(workflow=workflow, actor=reviewed_by, action="rejected")
+        AuditLog.objects.create(
+            workflow=workflow,
+            actor=reviewed_by,
+            action="rejected",
+            metadata=_rejection_metadata(note),
+        )
+        return workflow
+
+    @staticmethod
+    def _reject_expense_approver(workflow: AgentWorkflow, *, reviewed_by, note) -> AgentWorkflow:
+        expense = workflow.expense
+        expense.approval_status = Expense.ApprovalStatus.REJECTED
+        expense.save(update_fields=["approval_status", "updated_at"])
+        workflow.mark_rejected(reviewed_by=reviewed_by)
+        AuditLog.objects.create(
+            workflow=workflow,
+            actor=reviewed_by,
+            action="expense_rejected",
+            metadata=_rejection_metadata(note),
+        )
+        return workflow
+
+
+class ExpenseApprovalService:
+    """Starts one reviewable Expense Approver run for a tenant-scoped expense."""
+
+    _ACTIVE_STATUSES = [
+        AgentWorkflow.Status.PENDING,
+        AgentWorkflow.Status.RUNNING,
+        AgentWorkflow.Status.NEEDS_REVIEW,
+    ]
+
+    @classmethod
+    def start(cls, expense) -> AgentWorkflow:
+        if AgentWorkflow.objects.filter(
+            workflow_type="expense_approver",
+            expense=expense,
+            status__in=cls._ACTIVE_STATUSES,
+        ).exists():
+            raise ValueError("Expense already has an active expense approval workflow.")
+
+        policy = ExpenseApprovalPolicyService.matching_policy(expense)
+        workflow = AgentWorkflow.objects.create(
+            workflow_type="expense_approver",
+            expense=expense,
+            extracted_data={
+                "policy": _policy_metadata(policy),
+                "approval_queue": policy.approval_queue if policy else "Finance",
+            },
+        )
+        expense.approval_status = Expense.ApprovalStatus.PENDING
+        expense.save(update_fields=["approval_status", "updated_at"])
+
+        from .tasks import run_expense_approver
+
+        run_expense_approver.delay(tenant_id=expense.tenant_id, workflow_id=workflow.id)
         return workflow
 
 
@@ -367,6 +443,26 @@ def _strip_code_fence(text: str) -> str:
     if stripped.startswith("json"):
         stripped = stripped[len("json") :]
     return stripped.strip()
+
+
+def _policy_metadata(policy) -> dict:
+    if policy is None:
+        return {}
+    return {
+        "id": policy.id,
+        "name": policy.name,
+        "priority": policy.priority,
+        "category": policy.category,
+        "minimum_amount": str(policy.minimum_amount),
+        "maximum_amount": (
+            str(policy.maximum_amount) if policy.maximum_amount is not None else None
+        ),
+        "approval_queue": policy.approval_queue,
+    }
+
+
+def _rejection_metadata(note: str | None) -> dict:
+    return {"note": note} if note is not None else {}
 
 
 def _deterministic_policy_flags(expense, metadata: dict) -> list[str]:
