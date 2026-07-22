@@ -20,8 +20,13 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl reload nginx
 
+CERTBOT_CONTACT_ARGS=(--register-unsafely-without-email)
+if [[ -n "$CERTBOT_EMAIL" ]]; then
+  CERTBOT_CONTACT_ARGS=(--email "$CERTBOT_EMAIL")
+fi
+
 sudo certbot certonly --webroot --non-interactive --agree-tos \
-  --email "$CERTBOT_EMAIL" \
+  "${CERTBOT_CONTACT_ARGS[@]}" \
   --preferred-profile shortlived \
   --webroot-path /var/www/certbot \
   --ip-address "$BACKEND_PUBLIC_HOST"

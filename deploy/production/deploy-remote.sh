@@ -11,6 +11,8 @@ BACKEND_PUBLIC_IP="$2"
 APP_DIR="/srv/finora"
 PARAMETER_PREFIX="/finora/production"
 
+"$APP_DIR/deploy/production/bootstrap-host.sh"
+
 parameter() {
   aws ssm get-parameter --with-decryption --name "$PARAMETER_PREFIX/$1" \
     --query 'Parameter.Value' --output text
@@ -31,7 +33,7 @@ chmod 600 "$APP_DIR/.env.production"
 cd "$APP_DIR"
 if [[ ! -f "/etc/letsencrypt/live/$BACKEND_PUBLIC_IP/fullchain.pem" ]]; then
   "$APP_DIR/deploy/production/configure-nginx.sh" \
-    "$BACKEND_PUBLIC_IP" "$(< /etc/finora/certbot-email)"
+    "$BACKEND_PUBLIC_IP" "$(< /etc/finora/certbot-email 2>/dev/null || true)"
 fi
 if docker compose --env-file .env.production -f docker-compose.production.yml ps postgres --status running -q | grep -q .; then
   docker compose --env-file .env.production -f docker-compose.production.yml exec -T postgres \
