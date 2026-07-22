@@ -1,6 +1,6 @@
 # Finora Deployment Handoff
 
-> Continue here for deployment work. Last verified: **2026-07-22, 18:00 PKT**.
+> Continue here for deployment work. Last verified: **2026-07-22, 18:12 PKT**.
 > Read `AGENTS.md` first for architecture/engineering rules, then this file.
 
 ## Current goal
@@ -59,9 +59,13 @@ At the time this file was written:
   workflow had no path filters. Its remote command also retained SSM's one-hour
   default execution timeout while GitHub stopped polling after six minutes, and
   the workflow did not print the command ID needed for later inspection.
-- The prepared workflow fix restricts automatic runs to backend/deployment/IaC
+- The deployed workflow fix restricts automatic runs to backend/deployment/IaC
   inputs, serializes production deployments, sets a 60-second delivery timeout
   and 600-second execution timeout, and prints command lifecycle diagnostics.
+- Backend deployment run `29922149551` for commit `58a90c2` completed
+  successfully. SSM transitioned from `InProgress` to `Success`, returned
+  response code `0`, and the workflow's public HTTPS health check passed:
+  `https://github.com/sikandertariq/finora/actions/runs/29922149551`.
 - Fresh checks at 18:00 PKT returned HTTP `200` for all three
   public paths. Both health endpoints returned `{"status": "ok"}`:
   `https://52.73.119.50/api/health/`,
@@ -162,6 +166,11 @@ unless the same error text returns.
    configures explicit SSM delivery/execution deadlines, prints the SSM command
    ID and status transitions, and requests cancellation at its final deadline.
 
+10. **Frontend CI's Node 20/npm 10 rejected the npm 11-era lockfile.**
+    `frontend/package-lock.json` was regenerated with Node 20/npm 10 so the
+    transitive `@emnapi/core` and `@emnapi/runtime` entries required by
+    `npm ci` are recorded consistently.
+
 ## Important files
 
 | File | Purpose |
@@ -191,7 +200,7 @@ unless the same error text returns.
 
 ## Verification already performed
 
-- Backend test suite previously passed: 131 tests.
+- Backend test suite passed: 143 tests.
 - Frontend `npm run lint` and `npm run build` passed after both proxy changes.
 - Shell syntax passed for bootstrap/deploy scripts.
 - Workflow YAML parsed successfully and `git diff --check` passed.
@@ -203,12 +212,17 @@ unless the same error text returns.
   direct backend and Vercel proxy; the Vercel frontend returned HTTP `200`.
 - The deployment artifact regression test was observed failing before the
   workflow change and passing afterward: 4 tests passed.
+- `actionlint` accepted `.github/workflows/deploy-backend.yml`.
+- Deployment run `29922149551` completed successfully and exposed the new SSM
+  command ID, status transitions, status details, and response code.
+- In an isolated Node 20.20.2/npm 10.8.2 container, `npm ci`, `npm run lint`,
+  and `npm run build` all completed successfully with the regenerated lockfile.
 
 ## Git/worktree state
 
 - Local branch name: `main`.
 - Deployments are pushed to remote `main` with `git push origin main`.
-- Latest pushed commit when this handoff was written: `128cae5`.
+- Backend deployment fix commit: `58a90c2`.
 - `AGENTS.md` is an intentional untracked workspace instruction file. Do not
   stage, commit, delete, or overwrite it.
 - Check `git status --short` before making changes and preserve unrelated user
@@ -216,9 +230,7 @@ unless the same error text returns.
 
 ## Recommended follow-up after deployment is green
 
-1. Push the bounded deployment workflow on `main`, monitor its exact Actions
-   run, and record the final run URL/result here.
-2. Run the browser smoke test described above.
-3. Stop EC2 through `Demo power control` when the demo is not needed. Starting
+1. Run the browser smoke test described above.
+2. Stop EC2 through `Demo power control` when the demo is not needed. Starting
    later should be: start workflow, wait for all EC2 checks, then run backend
    deploy to renew the short IP certificate and reset disposable demo data.
