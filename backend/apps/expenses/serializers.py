@@ -1,7 +1,8 @@
 from django.conf import settings
 from rest_framework import serializers
 
-from .models import Expense, Receipt
+from .approval_services import ExpenseApprovalPolicyService
+from .models import Expense, ExpenseApprovalPolicy, Receipt
 from .services import ExpenseService
 
 
@@ -36,10 +37,11 @@ class ExpenseSerializer(serializers.ModelSerializer):
             "expense_date",
             "receipt",
             "created_by",
+            "approval_status",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_by", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_by", "approval_status", "created_at", "updated_at"]
 
     def create(self, validated_data):
         validated_data["created_by"] = self.context["request"].user
@@ -47,6 +49,35 @@ class ExpenseSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         return self._via_service(ExpenseService.update, instance, **validated_data)
+
+    @staticmethod
+    def _via_service(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+
+class ExpenseApprovalPolicySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExpenseApprovalPolicy
+        fields = [
+            "id",
+            "name",
+            "priority",
+            "category",
+            "minimum_amount",
+            "maximum_amount",
+            "approval_queue",
+            "is_active",
+        ]
+        read_only_fields = ["id"]
+
+    def create(self, validated_data):
+        return self._via_service(ExpenseApprovalPolicyService.create, **validated_data)
+
+    def update(self, instance, validated_data):
+        return self._via_service(ExpenseApprovalPolicyService.update, instance, **validated_data)
 
     @staticmethod
     def _via_service(fn, *args, **kwargs):

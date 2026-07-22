@@ -7,8 +7,12 @@ from apps.agents.serializers import AgentWorkflowSerializer
 from apps.agents.services import AgentWorkflowService
 from apps.tenancy.permissions import IsTenantMember
 
-from .models import Expense, Receipt
-from .serializers import ExpenseSerializer, ReceiptUploadSerializer
+from .models import Expense, ExpenseApprovalPolicy, Receipt
+from .serializers import (
+    ExpenseApprovalPolicySerializer,
+    ExpenseSerializer,
+    ReceiptUploadSerializer,
+)
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
@@ -19,6 +23,14 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         # Not a `queryset =` class attribute: that's evaluated once at import time,
         # before any request has set the tenant context. get_queryset() runs per-request.
         return Expense.objects.all()
+
+
+class ExpenseApprovalPolicyViewSet(viewsets.ModelViewSet):
+    serializer_class = ExpenseApprovalPolicySerializer
+    permission_classes = [IsAuthenticated, IsTenantMember]
+
+    def get_queryset(self):
+        return ExpenseApprovalPolicy.objects.all()
 
 
 class ReceiptUploadView(generics.GenericAPIView):
