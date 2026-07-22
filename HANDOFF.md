@@ -1,7 +1,13 @@
 # Finora — Handoff / Continue Here
 
 > Living status doc. If you're a fresh session: read [`CLAUDE.md`](CLAUDE.md) (the locked
-> spec) first, then this file for *where we actually are*. Last updated: **2026-07-21**.
+> spec) first, then this file for *where we actually are*. Last updated: **2026-07-22**.
+
+> **Deployment continuation (2026-07-22):** read
+> [`DEPLOYMENT_HANDOFF.md`](DEPLOYMENT_HANDOFF.md) before doing any AWS, Vercel,
+> GitHub Actions, or production work. It contains the exact active workflow,
+> live endpoint state, fixes already pushed, and next commands. The older
+> deployment-status bullets below predate the live AWS/Vercel deployment.
 
 ## TL;DR
 

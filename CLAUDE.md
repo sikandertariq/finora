@@ -3,6 +3,9 @@
 Project context and engineering guardrails for Claude Code. Read this before writing or changing anything.
 
 > **▶ Current status / where to continue:** see [`HANDOFF.md`](HANDOFF.md).
+> **▶ Active deployment goal and live state (2026-07-22):** read
+> [`DEPLOYMENT_HANDOFF.md`](DEPLOYMENT_HANDOFF.md) before running a deployment or
+> changing AWS, Vercel, GitHub Actions, or production configuration.
 > Build-order steps 1–7 (the full Receipt Processor vertical slice — tenant isolation, Expense/
 > Receipt + ExpenseService, the LLMProvider/Gemini boundary, AgentWorkflow + Celery, REST
 > endpoints, the frontend, and AuditLog) are all done and tested on branch `feat/tenant-foundation`.
