@@ -75,13 +75,34 @@
   redispatching the same task explicitly (`.delay()` from a second shell call) worked immediately
   and completed in seconds — noted here as a manual-testing quirk of this sandbox, not reproduced
   via the automated `.delay()`-based regression tests, which all pass.
-- **Backend tests: 131/131 passing** (up from 82 before this feature). Frontend builds and lints
-  clean (`npm run build` succeeds with the generalized types/components).
-- **Next up:** two agents down (Receipt Processor, Invoice Chaser), two to go — Expense Approver
-  and Monthly Close — plus the AI Co-Pilot. `AgentWorkflow`'s `receipt`/`invoice` nullable-FK
-  pattern held up fine for a second agent; whether a third agent's needs finally justify
-  generalizing it further (e.g. a generic content-type link) is a decision for whenever that agent
-  is scoped, not before.
+- **Expense Approver (the third agent) is DONE** — a full vertical slice for policy-routed,
+  human-reviewed expense decisions. `ExpenseApprovalPolicy` supplies tenant-scoped category/minimum
+  amount routing and a policy ceiling; `Expense` now records `not_requested` / `pending` /
+  `approved` / `rejected`; and `AgentWorkflow` deliberately gained one nullable `expense` FK rather
+  than a speculative generic relation. `ExpenseApprovalService` locks the expense, prevents duplicate
+  active reviews, snapshots the matched policy, marks the expense pending, and enqueues a tenant-bound
+  Celery task only after commit. `ExpenseApproverService` uses the existing `LLMProvider` boundary,
+  validates its recommendation/rationale/flags/confidence with `ExpenseApprovalAssessment` before it
+  reaches the workflow, and preserves deterministic policy flags on malformed output. The human
+  confirm/reject actions require `needs_review`, update the expense status, and append specific
+  `expense_approved` / `expense_rejected` audit events. The frontend adds policy management, an
+  approval request action on the expense list, a polling inbox, and a dedicated review panel while
+  keeping server state in React Query and only the selected workflow ID in Zustand.
+- **Fresh completion verification (2026-07-22):** `python -m pytest -q` passed **197/197** tests;
+  `npm run build` passed; `makemigrations --check --dry-run` and `manage.py check` passed against
+  the documented SQLite development database; and migrations `expenses.0002` and `agents.0004`
+  were applied to `backend/dev.sqlite3`. An isolated, no-network HTTP smoke path (temporary SQLite,
+  eager Celery, `FakeLLMProvider`) verified create expense → request approval (initial response
+  `pending`) → poll `needs_review` → human approval → expense `approved` → one
+  `expense_approved` audit log. The initial response being `pending` is intentional: it is serialized
+  before the post-commit task callback runs, and the client polls the workflow thereafter. The local
+  default PostgreSQL migration plan could not run because its configured `finora` credentials were
+  rejected; no production/deployment database was changed. Redis answered `PONG`; no `GEMINI_API_KEY`
+  was present in the verification shell, so no real provider call was attempted.
+- **Next up:** three agents down (Receipt Processor, Invoice Chaser, Expense Approver); Monthly Close
+  and the AI Co-Pilot remain. The explicit `receipt` / `invoice` / `expense` nullable-FK pattern has
+  now served three concrete agents. Revisit a generic relation only when a fourth consumer has a real
+  need that these direct links cannot meet.
 
 ## What exists right now
 
@@ -367,7 +388,7 @@ give anyone a button to undo it.
 ```bash
 cd backend
 source .venv/bin/activate          # venv already created on this machine
-python -m pytest -q                # expect: 82 passed
+python -m pytest -q                # expect: 197 passed
 python manage.py check             # expect: no issues
 ```
 
@@ -457,10 +478,9 @@ Per [`CLAUDE.md`](CLAUDE.md), build the **Receipt Processor as a vertical slice*
       minimal read-only `GET /api/audit-logs/` (see the writeup above for why the read endpoint
       was added despite not being named explicitly).
 
-**The build order (steps 1–7) is complete, and the second agent (Invoice Chaser) is also done** —
-see the TL;DR above and `docs/superpowers/specs/2026-07-06-invoice-chaser-design.md` /
-`docs/superpowers/plans/2026-07-06-invoice-chaser.md` for the full detail. Next: **Expense Approver**
-and **Monthly Close** + the AI Co-Pilot. None of those exist yet.
+**The build order (steps 1–7), Invoice Chaser, and Expense Approver are complete** — see the TL;DR
+above for the completed Expense Approver slice and its fresh verification evidence. Next: **Monthly
+Close** and the AI Co-Pilot. Neither exists yet.
 
 ## Conventions to keep following
 
@@ -503,9 +523,7 @@ and **Monthly Close** + the AI Co-Pilot. None of those exist yet.
    `models.py`, `services.py`, `tasks.py`, `views.py`), and `frontend/src/` (`lib/`, `hooks/`,
    `components/`) to load the isolation model, expense domain, agent/LLM/REST boundary, and the
    frontend into context — this is the full Receipt Processor vertical slice, steps 1–7.
-3. The locked build order is done. Next real decision: which of the other three agents (Invoice
-   Chaser, Expense Approver, Monthly Close) or the Co-Pilot to build next, and whether to first
-   generalize any of `AgentWorkflow`/`AgentWorkflowService` (currently receipt-specific in a few
-   places — e.g. `AgentWorkflow.receipt` is a direct FK, not generic) before adding a second agent,
-   or let the second agent's real needs drive that refactor instead of guessing now. Bring this to
-   the user as a real decision point, not something to assume.
+3. The locked build order is done and three agents now exist. Next real decision: build Monthly Close
+   or the Co-Pilot, and only generalize `AgentWorkflow`'s direct `receipt` / `invoice` / `expense`
+   links if the next concrete workflow demonstrates a need for it. Bring that trade-off to the user
+   as a real decision point, not something to assume.
