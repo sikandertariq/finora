@@ -41,7 +41,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
       - name: Deploy via Systems Manager
         env:
-          IMAGE_REF: ghcr.io/${{ github.repository_owner }}/finora-backend:${{ github.sha }}
+          IMAGE_REF: ghcr.io/${{ github.repository_owner }}/finora-backend:${{ steps.image-meta.outputs.version }}
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --document-name AWS-RunShellScript \

@@ -31,9 +31,13 @@ envsubst < "$APP_DIR/deploy/production/runtime.env.template" > "$APP_DIR/.env.pr
 chmod 600 "$APP_DIR/.env.production"
 
 cd "$APP_DIR"
+CERTBOT_EMAIL=""
+if [[ -f /etc/finora/certbot-email ]]; then
+  CERTBOT_EMAIL="$(< /etc/finora/certbot-email)"
+fi
 if [[ ! -f "/etc/letsencrypt/live/$BACKEND_PUBLIC_IP/fullchain.pem" ]]; then
   "$APP_DIR/deploy/production/configure-nginx.sh" \
-    "$BACKEND_PUBLIC_IP" "$(< /etc/finora/certbot-email 2>/dev/null || true)"
+    "$BACKEND_PUBLIC_IP" "$CERTBOT_EMAIL"
 fi
 if docker compose --env-file .env.production -f docker-compose.production.yml ps postgres --status running -q | grep -q .; then
   docker compose --env-file .env.production -f docker-compose.production.yml exec -T postgres \
